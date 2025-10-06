@@ -15,8 +15,8 @@ use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState, 
 use ratatui::Terminal;
 use serde::Serialize;
 use wasm_poke::{
-    build_call_graph, function_matches, parse_wasm, unique_cumulative_size, CallGraph,
-    FunctionInfo, WasmModuleInfo,
+    build_call_graph, disassemble_function_wat_lines, function_matches, parse_wasm,
+    unique_cumulative_size, CallGraph, FunctionInfo, WasmModuleInfo, WatLine,
 };
 
 #[derive(Debug, Parser)]
@@ -139,6 +139,9 @@ struct App {
     tree_selected: usize,
     // inspect mode state
     inspect_mode: bool,
+    // WAT lines and cursor for inspect
+    wat_lines: Vec<WatLine>,
+    wat_cursor: usize,
     // scroll offset for WAT pane (in lines)
     wat_scroll: u16,
     // scroll offset for Source pane (in lines)
@@ -171,6 +174,8 @@ impl App {
             expanded: std::collections::HashSet::new(),
             tree_selected: 0,
             inspect_mode: false,
+            wat_lines: Vec::new(),
+            wat_cursor: 0,
             wat_scroll: 0,
             source_scroll: 0,
         };
@@ -242,8 +247,7 @@ impl App {
                 }
                 KeyCode::Char('k') | KeyCode::Up => {
                     if self.inspect_mode {
-                        self.wat_scroll = self.wat_scroll.saturating_sub(1);
-                        self.source_scroll = self.source_scroll.saturating_sub(1);
+                        self.wat_cursor = self.wat_cursor.saturating_sub(1);
                     } else {
                         if self.tree_selected > 0 {
                             self.tree_selected -= 1;
@@ -252,8 +256,7 @@ impl App {
                 }
                 KeyCode::Char('j') | KeyCode::Down => {
                     if self.inspect_mode {
-                        self.wat_scroll = self.wat_scroll.saturating_add(1);
-                        self.source_scroll = self.source_scroll.saturating_add(1);
+                        self.wat_cursor = self.wat_cursor.saturating_add(1);
                     } else {
                         // clamp to current visible rows length (computed in draw)
                         // safe fallback: increment, will be clamped in draw selection
@@ -303,8 +306,7 @@ impl App {
                 }
                 KeyCode::PageUp | KeyCode::Char('u') => {
                     if self.inspect_mode {
-                        self.wat_scroll = self.wat_scroll.saturating_sub(10);
-                        self.source_scroll = self.source_scroll.saturating_sub(10);
+                        self.wat_cursor = self.wat_cursor.saturating_sub(10);
                     } else {
                         let step = 10usize;
                         if self.tree_selected >= step {
@@ -316,8 +318,7 @@ impl App {
                 }
                 KeyCode::PageDown | KeyCode::Char('d') => {
                     if self.inspect_mode {
-                        self.wat_scroll = self.wat_scroll.saturating_add(10);
-                        self.source_scroll = self.source_scroll.saturating_add(10);
+                        self.wat_cursor = self.wat_cursor.saturating_add(10);
                     } else {
                         let step = 10usize;
                         if let Some(rows) = self.visible_tree_rows() {
@@ -340,6 +341,18 @@ impl App {
                         self.inspect_mode = true;
                         self.wat_scroll = 0;
                         self.source_scroll = 0;
+                        self.wat_cursor = 0;
+                        if let Some(rows) = self.visible_tree_rows() {
+                            if let Some(row) = rows.get(self.tree_selected) {
+                                self.wat_lines =
+                                    disassemble_function_wat_lines(&self.wasm_bytes, row.index)
+                                        .unwrap_or_default();
+                            } else {
+                                self.wat_lines.clear();
+                            }
+                        } else {
+                            self.wat_lines.clear();
+                        }
                     }
                 }
                 _ => {}
@@ -362,9 +375,14 @@ impl App {
                 // Toggle inspect mode in list view
                 if self.inspect_mode {
                     self.inspect_mode = false;
-                } else if self.selected_function().is_some() {
+                } else if let Some(f) = self.selected_function() {
+                    let func_index = f.index;
                     self.inspect_mode = true;
                     self.wat_scroll = 0;
+                    self.source_scroll = 0;
+                    self.wat_cursor = 0;
+                    self.wat_lines = disassemble_function_wat_lines(&self.wasm_bytes, func_index)
+                        .unwrap_or_default();
                 }
             }
             KeyCode::Char('/') => {
@@ -379,8 +397,7 @@ impl App {
             }
             KeyCode::Char('k') | KeyCode::Up => {
                 if self.inspect_mode {
-                    self.wat_scroll = self.wat_scroll.saturating_sub(1);
-                    self.source_scroll = self.source_scroll.saturating_sub(1);
+                    self.wat_cursor = self.wat_cursor.saturating_sub(1);
                 } else {
                     if self.selected > 0 {
                         self.selected -= 1;
@@ -389,8 +406,7 @@ impl App {
             }
             KeyCode::Char('j') | KeyCode::Down => {
                 if self.inspect_mode {
-                    self.wat_scroll = self.wat_scroll.saturating_add(1);
-                    self.source_scroll = self.source_scroll.saturating_add(1);
+                    self.wat_cursor = self.wat_cursor.saturating_add(1);
                 } else {
                     if self.selected + 1 < self.indices.len() {
                         self.selected += 1;
@@ -399,8 +415,7 @@ impl App {
             }
             KeyCode::PageUp => {
                 if self.inspect_mode {
-                    self.wat_scroll = self.wat_scroll.saturating_sub(10);
-                    self.source_scroll = self.source_scroll.saturating_sub(10);
+                    self.wat_cursor = self.wat_cursor.saturating_sub(10);
                 } else {
                     let step = 10usize;
                     if self.selected >= step {
@@ -412,8 +427,7 @@ impl App {
             }
             KeyCode::PageDown => {
                 if self.inspect_mode {
-                    self.wat_scroll = self.wat_scroll.saturating_add(10);
-                    self.source_scroll = self.source_scroll.saturating_add(10);
+                    self.wat_cursor = self.wat_cursor.saturating_add(10);
                 } else {
                     let step = 10usize;
                     self.selected =
@@ -675,78 +689,20 @@ fn draw_table(f: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
 
         // Prepare hex
         let hex_text = wasm_poke::hexdump(body_bytes, 16);
-        // Disassemble and prettify operators into mnemonics with comments
-        let raw_wat =
-            match wasm_poke::disassemble_function_wat_bytes(&app.wasm_bytes, current_index) {
-                Ok(s) => s,
-                Err(e) => format!("disassembly error: {}", e),
-            };
-        let wat_text = {
-            let mut out = String::new();
-            for line in raw_wat.lines() {
-                let l = line.trim();
-                if let Some(rest) = l.strip_prefix("I32Const { value: ") {
-                    if let Some(num) = rest.strip_suffix(" }") {
-                        out.push_str(&format!("  i32.const {}  ;; push i32\n", num));
-                        continue;
-                    }
-                } else if let Some(rest) = l.strip_prefix("I64Const { value: ") {
-                    if let Some(num) = rest.strip_suffix(" }") {
-                        out.push_str(&format!("  i64.const {}  ;; push i64\n", num));
-                        continue;
-                    }
-                } else if let Some(rest) = l.strip_prefix("F32Const { value: ") {
-                    if let Some(num) = rest.strip_suffix(" }") {
-                        out.push_str(&format!("  f32.const {}  ;; push f32\n", num));
-                        continue;
-                    }
-                } else if let Some(rest) = l.strip_prefix("F64Const { value: ") {
-                    if let Some(num) = rest.strip_suffix(" }") {
-                        out.push_str(&format!("  f64.const {}  ;; push f64\n", num));
-                        continue;
-                    }
-                } else if let Some(rest) = l.strip_prefix("LocalGet { local_index: ") {
-                    if let Some(num) = rest.strip_suffix(" }") {
-                        out.push_str(&format!("  local.get {}  ;; read local\n", num));
-                        continue;
-                    }
-                } else if let Some(rest) = l.strip_prefix("LocalSet { local_index: ") {
-                    if let Some(num) = rest.strip_suffix(" }") {
-                        out.push_str(&format!("  local.set {}  ;; write local\n", num));
-                        continue;
-                    }
-                } else if let Some(rest) = l.strip_prefix("LocalTee { local_index: ") {
-                    if let Some(num) = rest.strip_suffix(" }") {
-                        out.push_str(&format!("  local.tee {}  ;; write+keep local\n", num));
-                        continue;
-                    }
-                } else if let Some(rest) = l.strip_prefix("Call { function_index: ") {
-                    if let Some(num) = rest.strip_suffix(" }") {
-                        out.push_str(&format!("  call {}  ;; direct call\n", num));
-                        continue;
-                    }
-                } else if l == "I32Add" {
-                    out.push_str("  i32.add  ;; add two i32\n");
-                    continue;
-                } else if l == "I64Add" {
-                    out.push_str("  i64.add  ;; add two i64\n");
-                    continue;
-                } else if l == "F32Add" {
-                    out.push_str("  f32.add  ;; add two f32\n");
-                    continue;
-                } else if l == "F64Add" {
-                    out.push_str("  f64.add  ;; add two f64\n");
-                    continue;
-                } else if l == "Return" {
-                    out.push_str("  return\n");
-                    continue;
-                }
-                // passthrough lines like headers and unknown operators
-                out.push_str(line);
-                out.push('\n');
-            }
-            out
+        // Structured WAT lines (indent + offsets + optional source)
+        let wat_lines: Vec<WatLine> = if app.wat_lines.is_empty() {
+            disassemble_function_wat_lines(&app.wasm_bytes, current_index).unwrap_or_default()
+        } else {
+            app.wat_lines.clone()
         };
+        let total_wat_lines = wat_lines.len();
+        let cursor = app.wat_cursor.min(total_wat_lines.saturating_sub(1));
+        let mut wat_buf = String::new();
+        for (i, wl) in wat_lines.iter().enumerate() {
+            let marker = if i == cursor { ">" } else { " " };
+            wat_buf.push_str(&format!("{marker} {}\n", wl.text));
+        }
+        let wat_text = wat_buf;
 
         // Split horizontally into three panes: Hex | WAT | Source
         let cols = Layout::default()
@@ -771,49 +727,126 @@ fn draw_table(f: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
         } else {
             wat_text
         };
+        // Center WAT cursor in pane (derive scroll purely from cursor)
+        let visible_wat_lines: u16 = cols[1].height.saturating_sub(2);
+        let vis = visible_wat_lines as usize;
+        let desired_top = cursor.saturating_sub(vis / 2);
+        let max_top = total_wat_lines.saturating_sub(vis);
+        let wat_scroll_local = desired_top.min(max_top);
+        let wat_scroll_u16 = wat_scroll_local as u16;
+
         let wat_widget = Paragraph::new(wat_text)
             .block(Block::default().borders(Borders::ALL).title(" WAT "))
-            .scroll((app.wat_scroll, 0));
+            .scroll((wat_scroll_u16, 0));
         let span_opt = wasm_poke::function_source_span(&app.wasm_bytes, current_index);
-        let source_text = if let Some(span) = span_opt {
+        // Determine target source line from WAT cursor (fallback to function start)
+        let target_line_opt: Option<u32> = wat_lines
+            .get(cursor)
+            .and_then(|w| w.src.as_ref().map(|s| s.line))
+            .or_else(|| span_opt.as_ref().map(|sp| sp.start_line));
+
+        let (source_text, source_scroll_u16) = if let Some(span) = span_opt {
             match std::fs::read_to_string(&span.file) {
                 Ok(src) => {
                     let lines: Vec<&str> = src.lines().collect();
                     let start = (span.start_line as usize).saturating_sub(1);
                     let end = (span.end_line as usize).min(lines.len());
                     let mut buf = String::new();
+
+                    // Build buffer and compute desired scroll to keep target line visible
+                    let target_line = target_line_opt.unwrap_or(span.start_line);
+                    let target_idx_abs = (target_line as usize).saturating_sub(1);
+                    let rel_idx = target_idx_abs.saturating_sub(start);
+
                     for i in start..end {
                         let ln = i + 1;
-                        let marker = if (ln as u32) == span.start_line {
-                            ">"
-                        } else {
-                            " "
-                        };
+                        let marker = if (ln as u32) == target_line { ">" } else { " " };
                         let content = lines[i];
                         buf.push_str(&format!("{marker} {:5} | {content}\n", ln));
                     }
-                    buf
+
+                    let total_source_lines: u16 = buf.lines().count() as u16;
+                    let visible_source_lines: u16 = cols[2].height.saturating_sub(2); // minus borders
+                    let max_source_scroll: u16 = if total_source_lines > visible_source_lines {
+                        total_source_lines - visible_source_lines
+                    } else {
+                        0
+                    };
+                    // Center target line when possible
+                    let half = (visible_source_lines / 2) as usize;
+                    let mut desired = if rel_idx > half {
+                        (rel_idx - half) as u16
+                    } else {
+                        0
+                    };
+                    if desired > max_source_scroll {
+                        desired = max_source_scroll;
+                    }
+
+                    (buf, desired)
                 }
-                Err(_) => format!(
-                    "{}:{}:{}-{}:{}",
-                    span.file, span.start_line, span.start_column, span.end_line, span.end_column
-                ),
+                Err(_) => {
+                    let fallback = format!(
+                        "{}:{}:{}-{}:{}",
+                        span.file,
+                        span.start_line,
+                        span.start_column,
+                        span.end_line,
+                        span.end_column
+                    );
+                    (fallback, 0)
+                }
+            }
+        } else if let Some(src_loc) = wat_lines.get(cursor).and_then(|w| w.src.as_ref()) {
+            match std::fs::read_to_string(&src_loc.file) {
+                Ok(src) => {
+                    let lines: Vec<&str> = src.lines().collect();
+                    let target_line = src_loc.line;
+                    let center = (target_line as usize).max(1);
+                    let start = center.saturating_sub(3);
+                    let end = (center + 3).min(lines.len());
+                    let mut buf = String::new();
+                    for i in start..end {
+                        let ln = i + 1;
+                        let marker = if ln as u32 == target_line { ">" } else { " " };
+                        let content = lines[i];
+                        buf.push_str(&format!("{marker} {:5} | {content}\n", ln));
+                    }
+
+                    // Center highlighted line within the source pane when possible
+                    let total_source_lines: u16 = buf.lines().count() as u16;
+                    let visible_source_lines: u16 = cols[2].height.saturating_sub(2);
+                    let max_source_scroll: u16 = if total_source_lines > visible_source_lines {
+                        total_source_lines - visible_source_lines
+                    } else {
+                        0
+                    };
+                    let half = (visible_source_lines / 2) as usize;
+                    let rel_idx = (center.saturating_sub(start + 1))
+                        .min((total_source_lines as usize).saturating_sub(1));
+                    let mut desired = if rel_idx > half {
+                        (rel_idx - half) as u16
+                    } else {
+                        0
+                    };
+                    if desired > max_source_scroll {
+                        desired = max_source_scroll;
+                    }
+
+                    (buf, desired)
+                }
+                Err(_) => (format!("{}:{}", src_loc.file, src_loc.line), 0),
             }
         } else {
-            "No source mapping available.\nBuild with debug information (DWARF) to enable source pane.".to_string()
+            (
+                "No source mapping available.\nBuild with debug information (DWARF) to enable source pane.".to_string(),
+                0,
+            )
         };
-        // Clamp Source scroll to content height so it doesn't scroll off the page
-        let total_source_lines: u16 = source_text.lines().count() as u16;
-        let visible_source_lines: u16 = cols[2].height.saturating_sub(2); // minus borders
-        let max_source_scroll: u16 = if total_source_lines > visible_source_lines {
-            total_source_lines - visible_source_lines
-        } else {
-            0
-        };
-        let clamped_source_scroll: u16 = app.source_scroll.min(max_source_scroll);
+
         let source_widget = Paragraph::new(source_text)
             .block(Block::default().borders(Borders::ALL).title(" Source "))
-            .scroll((clamped_source_scroll, 0));
+            .scroll((source_scroll_u16, 0));
 
         f.render_widget(hex_widget, cols[0]);
         f.render_widget(wat_widget, cols[1]);
@@ -1191,13 +1224,13 @@ fn draw_footer(f: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
         ),
         Span::raw(if app.graph_mode {
             if app.inspect_mode {
-                " navigate (h/l collapse/expand, Enter expand, j/k line, PgUp/PgDn WAT, u/d Source)"
+                " navigate (h/l collapse/expand, Enter expand, j/k line, PgUp/PgDn page)"
             } else {
                 " navigate (h/l collapse/expand, Enter expand)"
             }
         } else {
             if app.inspect_mode {
-                " navigate (j/k line, PgUp/PgDn WAT, u/d Source)"
+                " navigate (j/k line, PgUp/PgDn page)"
             } else {
                 " navigate"
             }

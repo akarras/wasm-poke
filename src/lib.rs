@@ -803,24 +803,58 @@ pub fn disassemble_function_wat_bytes(wasm_bytes: &[u8], target_func_index: u32)
                         }
                     }
 
-                    // Operators (pretty WAT-like mnemonics with brief comments)
+                    // Operators (pretty WAT-like mnemonics with brief comments + per-instruction source and indentation)
                     out.push_str("  ;; body\n");
+                    // Determine the absolute start of this function body in the wasm for offset mapping
+                    let br2 = body.get_binary_reader();
+                    let body_range = br2.range();
+                    let func_body_start = body_range.start;
                     let mut ops = body.get_operators_reader()?;
+                    let mut indent: usize = 0;
                     while !ops.eof() {
-                        let op = ops.read()?;
+                        // read operator with its absolute offset in the wasm bytes
+                        let (op, off) = ops.read_with_offset()?;
+                        // compute function-body-relative offset
+                        let rel_off = off.saturating_sub(func_body_start);
+                        // best-effort source location for this operator
+                        let src = map_instr_to_source(wasm_bytes, target_func_index, rel_off);
+                        let src_comment = src
+                            .as_ref()
+                            .map(|l| format!("  ;; {}:{}", l.file, l.line))
+                            .unwrap_or_default();
+                        // compute indentation string
+                        // Handle Else/End adjustments before printing
+                        let mut current_indent = indent;
+                        match op {
+                            Operator::Else => {
+                                if indent > 0 {
+                                    indent -= 1;
+                                }
+                                current_indent = indent;
+                            }
+                            Operator::End => {
+                                if indent > 0 {
+                                    indent -= 1;
+                                }
+                                current_indent = indent;
+                            }
+                            _ => {}
+                        }
+                        let pad = "  ".repeat(current_indent);
+
                         match op {
                             // constants
                             Operator::I32Const { value } => {
-                                out.push_str(&format!("  i32.const {}\n", value));
+                                out.push_str(&format!("{pad}i32.const {value}{src_comment}\n"));
                             }
                             Operator::I64Const { value } => {
-                                out.push_str(&format!("  i64.const {}\n", value));
+                                out.push_str(&format!("{pad}i64.const {value}{src_comment}\n"));
                             }
                             Operator::F32Const { value } => {
                                 let bits = value.bits();
                                 let val = f32::from_bits(bits);
                                 out.push_str(&format!(
-                                    "  f32.const {}  ;; bits=0x{:08x}\n",
+                                    "{pad}f32.const {}  ;; bits=0x{:08x}\n",
                                     val, bits
                                 ));
                             }
@@ -828,150 +862,505 @@ pub fn disassemble_function_wat_bytes(wasm_bytes: &[u8], target_func_index: u32)
                                 let bits = value.bits();
                                 let val = f64::from_bits(bits);
                                 out.push_str(&format!(
-                                    "  f64.const {}  ;; bits=0x{:016x}\n",
+                                    "{pad}f64.const {}  ;; bits=0x{:016x}\n",
                                     val, bits
                                 ));
                             }
 
                             // locals/globals
                             Operator::LocalGet { local_index } => {
-                                out.push_str(&format!("  local.get {}\n", local_index));
+                                out.push_str(&format!(
+                                    "{pad}local.get {local_index}{src_comment}\n"
+                                ));
                             }
                             Operator::LocalSet { local_index } => {
-                                out.push_str(&format!("  local.set {}\n", local_index));
+                                out.push_str(&format!(
+                                    "{pad}local.set {local_index}{src_comment}\n"
+                                ));
                             }
                             Operator::LocalTee { local_index } => {
-                                out.push_str(&format!("  local.tee {}\n", local_index));
+                                out.push_str(&format!(
+                                    "{pad}local.tee {local_index}{src_comment}\n"
+                                ));
                             }
                             Operator::GlobalGet { global_index } => {
-                                out.push_str(&format!("  global.get {}\n", global_index));
+                                out.push_str(&format!(
+                                    "{pad}global.get {global_index}{src_comment}\n"
+                                ));
                             }
                             Operator::GlobalSet { global_index } => {
-                                out.push_str(&format!("  global.set {}\n", global_index));
+                                out.push_str(&format!(
+                                    "{pad}global.set {global_index}{src_comment}\n"
+                                ));
                             }
 
                             // calls
                             Operator::Call { function_index } => {
-                                out.push_str(&format!("  call {}\n", function_index));
+                                out.push_str(&format!("{pad}call {function_index}{src_comment}\n"));
                             }
                             Operator::CallIndirect { .. } => {
-                                out.push_str("  call_indirect  ;; indirect call\n");
+                                out.push_str(&format!("{pad}call_indirect  ;; indirect call\n"));
                             }
 
                             // numeric ops (common)
-                            Operator::I32Add => out.push_str("  i32.add\n"),
-                            Operator::I32Sub => out.push_str("  i32.sub\n"),
-                            Operator::I32Mul => out.push_str("  i32.mul\n"),
-                            Operator::I64Add => out.push_str("  i64.add\n"),
-                            Operator::I64Sub => out.push_str("  i64.sub\n"),
-                            Operator::I64Mul => out.push_str("  i64.mul\n"),
-                            Operator::F32Add => out.push_str("  f32.add\n"),
-                            Operator::F32Sub => out.push_str("  f32.sub\n"),
-                            Operator::F32Mul => out.push_str("  f32.mul\n"),
-                            Operator::F64Add => out.push_str("  f64.add\n"),
-                            Operator::F64Sub => out.push_str("  f64.sub\n"),
-                            Operator::F64Mul => out.push_str("  f64.mul\n"),
+                            Operator::I32Add => {
+                                out.push_str(&format!("{pad}i32.add{src_comment}\n"))
+                            }
+                            Operator::I32Sub => {
+                                out.push_str(&format!("{pad}i32.sub{src_comment}\n"))
+                            }
+                            Operator::I32Mul => {
+                                out.push_str(&format!("{pad}i32.mul{src_comment}\n"))
+                            }
+                            Operator::I64Add => {
+                                out.push_str(&format!("{pad}i64.add{src_comment}\n"))
+                            }
+                            Operator::I64Sub => {
+                                out.push_str(&format!("{pad}i64.sub{src_comment}\n"))
+                            }
+                            Operator::I64Mul => {
+                                out.push_str(&format!("{pad}i64.mul{src_comment}\n"))
+                            }
+                            Operator::F32Add => {
+                                out.push_str(&format!("{pad}f32.add{src_comment}\n"))
+                            }
+                            Operator::F32Sub => {
+                                out.push_str(&format!("{pad}f32.sub{src_comment}\n"))
+                            }
+                            Operator::F32Mul => {
+                                out.push_str(&format!("{pad}f32.mul{src_comment}\n"))
+                            }
+                            Operator::F64Add => {
+                                out.push_str(&format!("{pad}f64.add{src_comment}\n"))
+                            }
+                            Operator::F64Sub => {
+                                out.push_str(&format!("{pad}f64.sub{src_comment}\n"))
+                            }
+                            Operator::F64Mul => {
+                                out.push_str(&format!("{pad}f64.mul{src_comment}\n"))
+                            }
 
                             // comparisons (subset)
-                            Operator::I32Eq => out.push_str("  i32.eq\n"),
-                            Operator::I32Ne => out.push_str("  i32.ne\n"),
-                            Operator::I32LtS => out.push_str("  i32.lt_s\n"),
-                            Operator::I32LtU => out.push_str("  i32.lt_u\n"),
-                            Operator::I32GtS => out.push_str("  i32.gt_s\n"),
-                            Operator::I32GtU => out.push_str("  i32.gt_u\n"),
+                            Operator::I32Eq => out.push_str(&format!("{pad}i32.eq{src_comment}\n")),
+                            Operator::I32Ne => out.push_str(&format!("{pad}i32.ne{src_comment}\n")),
+                            Operator::I32LtS => {
+                                out.push_str(&format!("{pad}i32.lt_s{src_comment}\n"))
+                            }
+                            Operator::I32LtU => {
+                                out.push_str(&format!("{pad}i32.lt_u{src_comment}\n"))
+                            }
+                            Operator::I32GtS => {
+                                out.push_str(&format!("{pad}i32.gt_s{src_comment}\n"))
+                            }
+                            Operator::I32GtU => {
+                                out.push_str(&format!("{pad}i32.gt_u{src_comment}\n"))
+                            }
 
                             // memory loads/stores (subset)
                             Operator::I32Load { memarg } => {
                                 let align = 1u64 << memarg.align;
                                 out.push_str(&format!(
-                                    "  i32.load offset={} align={}\n",
+                                    "{pad}i32.load offset={} align={}{src_comment}\n",
                                     memarg.offset, align
                                 ));
                             }
                             Operator::I64Load { memarg } => {
                                 let align = 1u64 << memarg.align;
                                 out.push_str(&format!(
-                                    "  i64.load offset={} align={}\n",
+                                    "{pad}i64.load offset={} align={}{src_comment}\n",
                                     memarg.offset, align
                                 ));
                             }
                             Operator::F32Load { memarg } => {
                                 let align = 1u64 << memarg.align;
                                 out.push_str(&format!(
-                                    "  f32.load offset={} align={}\n",
+                                    "{pad}f32.load offset={} align={}{src_comment}\n",
                                     memarg.offset, align
                                 ));
                             }
                             Operator::F64Load { memarg } => {
                                 let align = 1u64 << memarg.align;
                                 out.push_str(&format!(
-                                    "  f64.load offset={} align={}\n",
+                                    "{pad}f64.load offset={} align={}{src_comment}\n",
                                     memarg.offset, align
                                 ));
                             }
                             Operator::I32Store { memarg } => {
                                 let align = 1u64 << memarg.align;
                                 out.push_str(&format!(
-                                    "  i32.store offset={} align={}\n",
+                                    "{pad}i32.store offset={} align={}{src_comment}\n",
                                     memarg.offset, align
                                 ));
                             }
                             Operator::I64Store { memarg } => {
                                 let align = 1u64 << memarg.align;
                                 out.push_str(&format!(
-                                    "  i64.store offset={} align={}\n",
+                                    "{pad}i64.store offset={} align={}{src_comment}\n",
                                     memarg.offset, align
                                 ));
                             }
                             Operator::F32Store { memarg } => {
                                 let align = 1u64 << memarg.align;
                                 out.push_str(&format!(
-                                    "  f32.store offset={} align={}\n",
+                                    "{pad}f32.store offset={} align={}{src_comment}\n",
                                     memarg.offset, align
                                 ));
                             }
                             Operator::F64Store { memarg } => {
                                 let align = 1u64 << memarg.align;
                                 out.push_str(&format!(
-                                    "  f64.store offset={} align={}\n",
+                                    "{pad}f64.store offset={} align={}{src_comment}\n",
                                     memarg.offset, align
                                 ));
                             }
 
-                            // control flow (flat; not managing indentation here)
-                            Operator::Block { .. } => out.push_str("  block\n"),
-                            Operator::Loop { .. } => out.push_str("  loop\n"),
-                            Operator::If { .. } => out.push_str("  if\n"),
-                            Operator::Else => out.push_str("  else\n"),
-                            Operator::End => out.push_str("  end\n"),
+                            // control flow with indentation
+                            Operator::Block { .. } => {
+                                out.push_str(&format!("{pad}block{src_comment}\n"));
+                                indent = indent.saturating_add(1);
+                            }
+                            Operator::Loop { .. } => {
+                                out.push_str(&format!("{pad}loop{src_comment}\n"));
+                                indent = indent.saturating_add(1);
+                            }
+                            Operator::If { .. } => {
+                                out.push_str(&format!("{pad}if{src_comment}\n"));
+                                indent = indent.saturating_add(1);
+                            }
+                            Operator::Else => {
+                                out.push_str(&format!("{pad}else{src_comment}\n"));
+                                indent = indent.saturating_add(1);
+                            }
+                            Operator::End => {
+                                out.push_str(&format!("{pad}end{src_comment}\n"));
+                            }
                             Operator::Br { relative_depth } => {
-                                out.push_str(&format!("  br {}\n", relative_depth));
+                                out.push_str(&format!("{pad}br {relative_depth}{src_comment}\n"));
                             }
                             Operator::BrIf { relative_depth } => {
-                                out.push_str(&format!("  br_if {}\n", relative_depth));
+                                out.push_str(&format!(
+                                    "{pad}br_if {relative_depth}{src_comment}\n"
+                                ));
                             }
                             Operator::BrTable { .. } => {
-                                out.push_str("  br_table  ;; branch table\n");
+                                out.push_str(&format!("{pad}br_table  ;; branch table\n"));
                             }
 
                             // misc
-                            Operator::Return => out.push_str("  return\n"),
-                            Operator::Drop => out.push_str("  drop\n"),
-                            Operator::Select => out.push_str("  select\n"),
-                            Operator::Nop => out.push_str("  nop\n"),
-                            Operator::Unreachable => out.push_str("  unreachable\n"),
-                            Operator::MemoryGrow { .. } => out.push_str("  memory.grow\n"),
-                            Operator::MemorySize { .. } => out.push_str("  memory.size\n"),
+                            Operator::Return => {
+                                out.push_str(&format!("{pad}return{src_comment}\n"))
+                            }
+                            Operator::Drop => out.push_str(&format!("{pad}drop{src_comment}\n")),
+                            Operator::Select => {
+                                out.push_str(&format!("{pad}select{src_comment}\n"))
+                            }
+                            Operator::Nop => out.push_str(&format!("{pad}nop{src_comment}\n")),
+                            Operator::Unreachable => {
+                                out.push_str(&format!("{pad}unreachable{src_comment}\n"))
+                            }
+                            Operator::MemoryGrow { .. } => {
+                                out.push_str(&format!("{pad}memory.grow{src_comment}\n"))
+                            }
+                            Operator::MemorySize { .. } => {
+                                out.push_str(&format!("{pad}memory.size{src_comment}\n"))
+                            }
 
                             // default: leave a comment with the raw debug form
                             _ => {
-                                out.push_str(&format!("  ;; {:?}\n", op));
+                                out.push_str(&format!("{pad};; {:?}{src_comment}\n", op));
                             }
                         }
                     }
 
                     out.push_str(")\n");
                     return Ok(out);
+                }
+
+                defined_funcs_seen += 1;
+            }
+            _ => {}
+        }
+    }
+
+    Err(anyhow!("function index {} not found", target_func_index))
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WatLine {
+    pub text: String,
+    pub offset: usize,               // function-body-relative byte offset
+    pub indent: usize,               // visual indentation level
+    pub src: Option<SourceLocation>, // mapped source location if available
+}
+
+/// Disassemble a single function into structured WAT-like lines.
+/// - Returns header/locals/body markers and a closing paren as separate lines.
+/// - Operator lines include indentation and carry function-body-relative offsets and optional source locations.
+/// - No inline source comments are embedded in `text`; consumers can use `src` to coordinate highlighting.
+pub fn disassemble_function_wat_lines(
+    wasm_bytes: &[u8],
+    target_func_index: u32,
+) -> Result<Vec<WatLine>> {
+    let mut imported_funcs: u32 = 0;
+    let mut defined_funcs_seen: u32 = 0;
+
+    for payload in Parser::new(0).parse_all(wasm_bytes) {
+        let payload = payload?;
+        match payload {
+            Payload::ImportSection(s) => {
+                for import in s {
+                    let import = import?;
+                    if matches!(import.ty, TypeRef::Func(_)) {
+                        imported_funcs = imported_funcs
+                            .checked_add(1)
+                            .ok_or_else(|| anyhow!("imported function count overflow"))?;
+                    }
+                }
+            }
+            Payload::CodeSectionEntry(body) => {
+                let defined_idx = defined_funcs_seen;
+                let this_global = imported_funcs
+                    .checked_add(defined_idx)
+                    .ok_or_else(|| anyhow!("function index overflow"))?;
+
+                if this_global == target_func_index {
+                    let mut lines: Vec<WatLine> = Vec::new();
+
+                    // Header
+                    lines.push(WatLine {
+                        text: format!(";; func [{}]", target_func_index),
+                        offset: 0,
+                        indent: 0,
+                        src: None,
+                    });
+                    lines.push(WatLine {
+                        text: "(func".to_string(),
+                        offset: 0,
+                        indent: 0,
+                        src: None,
+                    });
+
+                    // Locals
+                    let mut locals_reader = body.get_locals_reader()?;
+                    if locals_reader.get_count() > 0 {
+                        lines.push(WatLine {
+                            text: "  ;; locals:".to_string(),
+                            offset: 0,
+                            indent: 0,
+                            src: None,
+                        });
+                        for _ in 0..locals_reader.get_count() {
+                            let (cnt, ty) = locals_reader.read()?;
+                            lines.push(WatLine {
+                                text: format!("  ;;   count={} type={:?}", cnt, ty),
+                                offset: 0,
+                                indent: 0,
+                                src: None,
+                            });
+                        }
+                    }
+
+                    // Operators body marker
+                    lines.push(WatLine {
+                        text: "  ;; body".to_string(),
+                        offset: 0,
+                        indent: 0,
+                        src: None,
+                    });
+
+                    // Operators: WAT-like mnemonics with indentation, carrying offsets and src
+                    let br2 = body.get_binary_reader();
+                    let body_range = br2.range();
+                    let func_body_start = body_range.start;
+
+                    let mut ops = body.get_operators_reader()?;
+                    let mut indent: usize = 0;
+
+                    while !ops.eof() {
+                        let (op, abs_off) = ops.read_with_offset()?;
+                        let rel_off = abs_off.saturating_sub(func_body_start);
+                        // Adjust indent for Else/End before printing
+                        let mut current_indent = indent;
+                        match op {
+                            Operator::Else => {
+                                if indent > 0 {
+                                    indent -= 1;
+                                }
+                                current_indent = indent;
+                            }
+                            Operator::End => {
+                                if indent > 0 {
+                                    indent -= 1;
+                                }
+                                current_indent = indent;
+                            }
+                            _ => {}
+                        }
+                        let pad = "  ".repeat(current_indent);
+
+                        // Map source for this operator (optional)
+                        let src = map_instr_to_source(wasm_bytes, target_func_index, rel_off);
+
+                        // Emit mnemonic text without inline comments
+                        let text = match op {
+                            // constants
+                            Operator::I32Const { value } => format!("{pad}i32.const {value}"),
+                            Operator::I64Const { value } => format!("{pad}i64.const {value}"),
+                            Operator::F32Const { value } => {
+                                let bits = value.bits();
+                                let val = f32::from_bits(bits);
+                                format!("{pad}f32.const {val}  ;; bits=0x{bits:08x}")
+                            }
+                            Operator::F64Const { value } => {
+                                let bits = value.bits();
+                                let val = f64::from_bits(bits);
+                                format!("{pad}f64.const {val}  ;; bits=0x{bits:016x}")
+                            }
+
+                            // locals/globals
+                            Operator::LocalGet { local_index } => {
+                                format!("{pad}local.get {local_index}")
+                            }
+                            Operator::LocalSet { local_index } => {
+                                format!("{pad}local.set {local_index}")
+                            }
+                            Operator::LocalTee { local_index } => {
+                                format!("{pad}local.tee {local_index}")
+                            }
+                            Operator::GlobalGet { global_index } => {
+                                format!("{pad}global.get {global_index}")
+                            }
+                            Operator::GlobalSet { global_index } => {
+                                format!("{pad}global.set {global_index}")
+                            }
+
+                            // calls
+                            Operator::Call { function_index } => {
+                                format!("{pad}call {function_index}")
+                            }
+                            Operator::CallIndirect { .. } => {
+                                format!("{pad}call_indirect")
+                            }
+
+                            // numeric ops (subset)
+                            Operator::I32Add => format!("{pad}i32.add"),
+                            Operator::I32Sub => format!("{pad}i32.sub"),
+                            Operator::I32Mul => format!("{pad}i32.mul"),
+                            Operator::I64Add => format!("{pad}i64.add"),
+                            Operator::I64Sub => format!("{pad}i64.sub"),
+                            Operator::I64Mul => format!("{pad}i64.mul"),
+                            Operator::F32Add => format!("{pad}f32.add"),
+                            Operator::F32Sub => format!("{pad}f32.sub"),
+                            Operator::F32Mul => format!("{pad}f32.mul"),
+                            Operator::F64Add => format!("{pad}f64.add"),
+                            Operator::F64Sub => format!("{pad}f64.sub"),
+                            Operator::F64Mul => format!("{pad}f64.mul"),
+
+                            // compares (subset)
+                            Operator::I32Eq => format!("{pad}i32.eq"),
+                            Operator::I32Ne => format!("{pad}i32.ne"),
+                            Operator::I32LtS => format!("{pad}i32.lt_s"),
+                            Operator::I32LtU => format!("{pad}i32.lt_u"),
+                            Operator::I32GtS => format!("{pad}i32.gt_s"),
+                            Operator::I32GtU => format!("{pad}i32.gt_u"),
+
+                            // memory (subset)
+                            Operator::I32Load { memarg } => {
+                                let align = 1u64 << memarg.align;
+                                format!("{pad}i32.load offset={} align={}", memarg.offset, align)
+                            }
+                            Operator::I64Load { memarg } => {
+                                let align = 1u64 << memarg.align;
+                                format!("{pad}i64.load offset={} align={}", memarg.offset, align)
+                            }
+                            Operator::F32Load { memarg } => {
+                                let align = 1u64 << memarg.align;
+                                format!("{pad}f32.load offset={} align={}", memarg.offset, align)
+                            }
+                            Operator::F64Load { memarg } => {
+                                let align = 1u64 << memarg.align;
+                                format!("{pad}f64.load offset={} align={}", memarg.offset, align)
+                            }
+                            Operator::I32Store { memarg } => {
+                                let align = 1u64 << memarg.align;
+                                format!("{pad}i32.store offset={} align={}", memarg.offset, align)
+                            }
+                            Operator::I64Store { memarg } => {
+                                let align = 1u64 << memarg.align;
+                                format!("{pad}i64.store offset={} align={}", memarg.offset, align)
+                            }
+                            Operator::F32Store { memarg } => {
+                                let align = 1u64 << memarg.align;
+                                format!("{pad}f32.store offset={} align={}", memarg.offset, align)
+                            }
+                            Operator::F64Store { memarg } => {
+                                let align = 1u64 << memarg.align;
+                                format!("{pad}f64.store offset={} align={}", memarg.offset, align)
+                            }
+
+                            // control flow with indentation
+                            Operator::Block { .. } => {
+                                // print then increase indent
+                                let t = format!("{pad}block");
+                                indent = indent.saturating_add(1);
+                                t
+                            }
+                            Operator::Loop { .. } => {
+                                let t = format!("{pad}loop");
+                                indent = indent.saturating_add(1);
+                                t
+                            }
+                            Operator::If { .. } => {
+                                let t = format!("{pad}if");
+                                indent = indent.saturating_add(1);
+                                t
+                            }
+                            Operator::Else => {
+                                let t = format!("{pad}else");
+                                indent = indent.saturating_add(1);
+                                t
+                            }
+                            Operator::End => format!("{pad}end"),
+
+                            // branches
+                            Operator::Br { relative_depth } => {
+                                format!("{pad}br {relative_depth}")
+                            }
+                            Operator::BrIf { relative_depth } => {
+                                format!("{pad}br_if {relative_depth}")
+                            }
+                            Operator::BrTable { .. } => format!("{pad}br_table"),
+
+                            // misc
+                            Operator::Return => format!("{pad}return"),
+                            Operator::Drop => format!("{pad}drop"),
+                            Operator::Select => format!("{pad}select"),
+                            Operator::Nop => format!("{pad}nop"),
+                            Operator::Unreachable => format!("{pad}unreachable"),
+                            Operator::MemoryGrow { .. } => format!("{pad}memory.grow"),
+                            Operator::MemorySize { .. } => format!("{pad}memory.size"),
+
+                            // default
+                            other => format!("{pad};; {:?}", other),
+                        };
+
+                        lines.push(WatLine {
+                            text,
+                            offset: rel_off,
+                            indent: current_indent,
+                            src,
+                        });
+                    }
+
+                    // Closing
+                    lines.push(WatLine {
+                        text: ")".to_string(),
+                        offset: 0,
+                        indent: 0,
+                        src: None,
+                    });
+
+                    return Ok(lines);
                 }
 
                 defined_funcs_seen += 1;
