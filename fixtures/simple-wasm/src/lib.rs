@@ -119,8 +119,10 @@ pub extern "C" fn call_axpb_f64_n(x: f64, a: f64, b: f64, n: u32) -> f64 {
 }
 
 // Minimal panic handler for no_std wasm cdylib
+#[cfg(not(test))]
 use core::panic::PanicInfo;
 
+#[cfg(not(test))]
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
     loop {}

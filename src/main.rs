@@ -14,7 +14,10 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState, Wrap};
 use ratatui::Terminal;
 use serde::Serialize;
-use wasm_poke::{function_matches, parse_wasm, FunctionInfo, WasmModuleInfo};
+use wasm_poke::{
+    build_call_graph, function_matches, parse_wasm, unique_cumulative_size, CallGraph,
+    FunctionInfo, WasmModuleInfo,
+};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -52,13 +55,17 @@ fn main() -> Result<()> {
 
     let module =
         parse_wasm(&cli.wasm_path).with_context(|| "Failed to parse the provided wasm file")?;
+    // Build call graph once for TUI graph mode
+    let wasm_bytes = std::fs::read(&cli.wasm_path)
+        .with_context(|| format!("Failed to read file {}", cli.wasm_path.display()))?;
+    let call_graph = build_call_graph(&wasm_bytes).unwrap_or_default();
 
     if cli.json || cli.no_ui {
         run_non_interactive(&cli, &module)?;
         return Ok(());
     }
 
-    run_tui(&cli, &module)
+    run_tui(&cli, &module, call_graph, wasm_bytes)
 }
 
 fn run_non_interactive(cli: &Cli, module: &WasmModuleInfo) -> Result<()> {
@@ -122,10 +129,29 @@ struct App {
     in_search: bool,
     raw_names: bool,
     last_update: Instant,
+    // cached wasm bytes for inspect mode
+    wasm_bytes: Vec<u8>,
+    // graph mode state
+    graph_mode: bool,
+    call_graph: CallGraph,
+    graph_root: Option<u32>,
+    expanded: std::collections::HashSet<u32>,
+    tree_selected: usize,
+    // inspect mode state
+    inspect_mode: bool,
+    // scroll offset for WAT pane (in lines)
+    wat_scroll: u16,
 }
 
 impl App {
-    fn new(path: String, module: WasmModuleInfo, filter: Option<String>, raw_names: bool) -> Self {
+    fn new(
+        path: String,
+        module: WasmModuleInfo,
+        filter: Option<String>,
+        raw_names: bool,
+        wasm_bytes: Vec<u8>,
+        call_graph: CallGraph,
+    ) -> Self {
         let mut app = Self {
             wasm_path: path,
             indices: Vec::new(),
@@ -135,6 +161,15 @@ impl App {
             module,
             raw_names,
             last_update: Instant::now(),
+            // cache wasm bytes
+            wasm_bytes,
+            graph_mode: false,
+            call_graph,
+            graph_root: None,
+            expanded: std::collections::HashSet::new(),
+            tree_selected: 0,
+            inspect_mode: false,
+            wat_scroll: 0,
         };
         app.refresh_indices();
         app
@@ -194,8 +229,134 @@ impl App {
             return false;
         }
 
+        // Graph mode handling
+        if self.graph_mode {
+            match key.code {
+                KeyCode::Char('q') => return true,
+                KeyCode::Char('g') => {
+                    // toggle off graph mode
+                    self.graph_mode = false;
+                }
+                KeyCode::Char('k') | KeyCode::Up => {
+                    if self.tree_selected > 0 {
+                        self.tree_selected -= 1;
+                    }
+                    if self.inspect_mode {
+                        self.wat_scroll = 0;
+                    }
+                }
+                KeyCode::Char('j') | KeyCode::Down => {
+                    // clamp to current visible rows length (computed in draw)
+                    // safe fallback: increment, will be clamped in draw selection
+                    self.tree_selected = self.tree_selected.saturating_add(1);
+                    if self.inspect_mode {
+                        self.wat_scroll = 0;
+                    }
+                }
+                KeyCode::Left | KeyCode::Char('h') => {
+                    // collapse current node if expanded
+                    if let Some(rows) = self.visible_tree_rows() {
+                        if let Some(row) = rows.get(self.tree_selected) {
+                            if self.expanded.remove(&row.index) {
+                                // collapsed current node
+                            } else {
+                                // if not expanded, try to move selection to parent (upwards)
+                                if self.tree_selected > 0 {
+                                    self.tree_selected -= 1;
+                                }
+                            }
+                        }
+                    }
+                }
+                KeyCode::Right | KeyCode::Enter | KeyCode::Char('l') => {
+                    if let Some(rows) = self.visible_tree_rows() {
+                        if let Some(row) = rows.get(self.tree_selected) {
+                            // expand if it has children
+                            if self
+                                .call_graph
+                                .edges
+                                .get(&row.index)
+                                .map(|v| !v.is_empty())
+                                .unwrap_or(false)
+                            {
+                                self.expanded.insert(row.index);
+                            }
+                        }
+                    }
+                }
+                KeyCode::Home => {
+                    self.tree_selected = 0;
+                }
+                KeyCode::End => {
+                    if let Some(rows) = self.visible_tree_rows() {
+                        if !rows.is_empty() {
+                            self.tree_selected = rows.len() - 1;
+                        }
+                    }
+                }
+                KeyCode::PageUp => {
+                    if self.inspect_mode {
+                        self.wat_scroll = self.wat_scroll.saturating_sub(10);
+                    } else {
+                        let step = 10usize;
+                        if self.tree_selected >= step {
+                            self.tree_selected -= step;
+                        } else {
+                            self.tree_selected = 0;
+                        }
+                    }
+                }
+                KeyCode::PageDown => {
+                    if self.inspect_mode {
+                        self.wat_scroll = self.wat_scroll.saturating_add(10);
+                    } else {
+                        let step = 10usize;
+                        if let Some(rows) = self.visible_tree_rows() {
+                            self.tree_selected =
+                                (self.tree_selected + step).min(rows.len().saturating_sub(1));
+                        }
+                    }
+                }
+                KeyCode::Char('/') => {
+                    self.in_search = true;
+                }
+                KeyCode::Char('r') => {
+                    self.raw_names = !self.raw_names;
+                }
+                KeyCode::Char('i') | KeyCode::Char('I') => {
+                    // Toggle inspect mode in graph view
+                    if self.inspect_mode {
+                        self.inspect_mode = false;
+                    } else {
+                        self.inspect_mode = true;
+                        self.wat_scroll = 0;
+                    }
+                }
+                _ => {}
+            }
+            return false;
+        }
+
         match key.code {
             KeyCode::Char('q') => return true,
+            KeyCode::Char('g') => {
+                // enter graph mode with current selection as root
+                if let Some(f) = self.selected_function() {
+                    self.graph_root = Some(f.index);
+                    self.expanded.clear();
+                    self.tree_selected = 0;
+                    self.graph_mode = true;
+                }
+            }
+            KeyCode::Char('i') | KeyCode::Char('I') => {
+                // Toggle inspect mode in list view
+                if self.inspect_mode {
+                    self.inspect_mode = false;
+                } else if self.selected_function().is_some() {
+                    self.inspect_mode = true;
+                    self.wat_scroll = 0;
+                }
+            }
             KeyCode::Char('/') => {
                 self.in_search = true;
             }
@@ -210,23 +371,38 @@ impl App {
                 if self.selected > 0 {
                     self.selected -= 1;
                 }
+                if self.inspect_mode {
+                    self.wat_scroll = 0;
+                }
             }
             KeyCode::Char('j') | KeyCode::Down => {
                 if self.selected + 1 < self.indices.len() {
                     self.selected += 1;
                 }
+                if self.inspect_mode {
+                    self.wat_scroll = 0;
+                }
             }
             KeyCode::PageUp => {
-                let step = 10usize;
-                if self.selected >= step {
-                    self.selected -= step;
+                if self.inspect_mode {
+                    self.wat_scroll = self.wat_scroll.saturating_sub(10);
                 } else {
-                    self.selected = 0;
+                    let step = 10usize;
+                    if self.selected >= step {
+                        self.selected -= step;
+                    } else {
+                        self.selected = 0;
+                    }
                 }
             }
             KeyCode::PageDown => {
-                let step = 10usize;
-                self.selected = (self.selected + step).min(self.indices.len().saturating_sub(1));
+                if self.inspect_mode {
+                    self.wat_scroll = self.wat_scroll.saturating_add(10);
+                } else {
+                    let step = 10usize;
+                    self.selected =
+                        (self.selected + step).min(self.indices.len().saturating_sub(1));
+                }
             }
             KeyCode::Home => {
                 self.selected = 0;
@@ -240,9 +416,78 @@ impl App {
         }
         false
     }
+
+    // Compute visible tree rows based on root and expanded nodes.
+    // Returns None if no root is set.
+    fn visible_tree_rows(&self) -> Option<Vec<TreeRow>> {
+        let root = self.graph_root?;
+        let mut rows: Vec<TreeRow> = Vec::new();
+        use std::collections::HashSet;
+        let mut path: Vec<u32> = Vec::new();
+        let mut stack: Vec<(u32, usize, usize)> = Vec::new(); // (node, depth, child_index)
+        stack.push((root, 0, 0));
+        path.push(root);
+
+        // helper to push a row
+        let mut push_row = |idx: u32, depth: usize, is_cycle: bool| {
+            let has_indirect = *self.call_graph.has_indirect.get(&idx).unwrap_or(&false);
+            rows.push(TreeRow {
+                depth,
+                index: idx,
+                is_cycle,
+                has_indirect,
+            });
+        };
+
+        while let Some((node, depth, mut child_i)) = stack.pop() {
+            // push this node (when first visiting)
+            if child_i == 0 {
+                push_row(node, depth, false);
+            }
+
+            // expand children only if expanded contains node
+            if self.expanded.contains(&node) {
+                if let Some(children) = self.call_graph.edges.get(&node) {
+                    while child_i < children.len() {
+                        let child = children[child_i];
+                        child_i += 1;
+                        // put current back with next child index
+                        stack.push((node, depth, child_i));
+                        if path.contains(&child) {
+                            // cycle marker
+                            push_row(child, depth + 1, true);
+                            break;
+                        } else {
+                            // descend
+                            path.push(child);
+                            stack.push((child, depth + 1, 0));
+                            break;
+                        }
+                    }
+                    // when exhausted, pop from path
+                    if child_i >= children.len() {
+                        let _ = path.pop();
+                    }
+                } else {
+                    // no children
+                    let _ = path.pop();
+                }
+            } else {
+                // node collapsed; pop from path
+                let _ = path.pop();
+            }
+        }
+
+        Some(rows)
+    }
 }
 
-fn run_tui(cli: &Cli, module: &WasmModuleInfo) -> Result<()> {
+fn run_tui(
+    cli: &Cli,
+    module: &WasmModuleInfo,
+    call_graph: CallGraph,
+    wasm_bytes: Vec<u8>,
+) -> Result<()> {
     // Terminal setup
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -261,6 +506,8 @@ fn run_tui(cli: &Cli, module: &WasmModuleInfo) -> Result<()> {
         module.clone(),
         cli.filter.clone(),
         cli.raw_names,
+        wasm_bytes,
+        call_graph,
     );
 
     let res = run_ui_loop(&mut terminal, &mut app);
@@ -373,7 +620,255 @@ fn draw_header(f: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
     f.render_widget(p, area);
 }
 
+#[derive(Debug, Clone)]
+struct TreeRow {
+    depth: usize,
+    index: u32,
+    is_cycle: bool,
+    has_indirect: bool,
+}
+
 fn draw_table(f: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
+    // Inspect mode rendering (side-by-side hex and WAT)
+    if app.inspect_mode {
+        // Determine current function index based on current mode/selection
+        let current_index = if app.graph_mode {
+            if let Some(rows) = app.visible_tree_rows() {
+                rows.get(app.tree_selected).map(|r| r.index)
+            } else {
+                None
+            }
+        } else {
+            app.selected_function().map(|f| f.index)
+        };
+
+        let current_index = if let Some(ix) = current_index {
+            ix
+        } else {
+            // Nothing selected
+            let p = Paragraph::new("No function selected for inspect")
+                .block(Block::default().borders(Borders::ALL).title(" Inspect "));
+            f.render_widget(p, area);
+            return;
+        };
+
+        // Slice function body bytes from cached wasm
+        let body_bytes =
+            wasm_poke::function_body_bytes(&app.module, &app.wasm_bytes, current_index)
+                .unwrap_or(&[]);
+
+        // Prepare hex
+        let hex_text = wasm_poke::hexdump(body_bytes, 16);
+        // Disassemble and prettify operators into mnemonics with comments
+        let raw_wat =
+            match wasm_poke::disassemble_function_wat_bytes(&app.wasm_bytes, current_index) {
+                Ok(s) => s,
+                Err(e) => format!("disassembly error: {}", e),
+            };
+        let wat_text = {
+            let mut out = String::new();
+            for line in raw_wat.lines() {
+                let l = line.trim();
+                if let Some(rest) = l.strip_prefix("I32Const { value: ") {
+                    if let Some(num) = rest.strip_suffix(" }") {
+                        out.push_str(&format!("  i32.const {}  ;; push i32\n", num));
+                        continue;
+                    }
+                } else if let Some(rest) = l.strip_prefix("I64Const { value: ") {
+                    if let Some(num) = rest.strip_suffix(" }") {
+                        out.push_str(&format!("  i64.const {}  ;; push i64\n", num));
+                        continue;
+                    }
+                } else if let Some(rest) = l.strip_prefix("F32Const { value: ") {
+                    if let Some(num) = rest.strip_suffix(" }") {
+                        out.push_str(&format!("  f32.const {}  ;; push f32\n", num));
+                        continue;
+                    }
+                } else if let Some(rest) = l.strip_prefix("F64Const { value: ") {
+                    if let Some(num) = rest.strip_suffix(" }") {
+                        out.push_str(&format!("  f64.const {}  ;; push f64\n", num));
+                        continue;
+                    }
+                } else if let Some(rest) = l.strip_prefix("LocalGet { local_index: ") {
+                    if let Some(num) = rest.strip_suffix(" }") {
+                        out.push_str(&format!("  local.get {}  ;; read local\n", num));
+                        continue;
+                    }
+                } else if let Some(rest) = l.strip_prefix("LocalSet { local_index: ") {
+                    if let Some(num) = rest.strip_suffix(" }") {
+                        out.push_str(&format!("  local.set {}  ;; write local\n", num));
+                        continue;
+                    }
+                } else if let Some(rest) = l.strip_prefix("LocalTee { local_index: ") {
+                    if let Some(num) = rest.strip_suffix(" }") {
+                        out.push_str(&format!("  local.tee {}  ;; write+keep local\n", num));
+                        continue;
+                    }
+                } else if let Some(rest) = l.strip_prefix("Call { function_index: ") {
+                    if let Some(num) = rest.strip_suffix(" }") {
+                        out.push_str(&format!("  call {}  ;; direct call\n", num));
+                        continue;
+                    }
+                } else if l == "I32Add" {
+                    out.push_str("  i32.add  ;; add two i32\n");
+                    continue;
+                } else if l == "I64Add" {
+                    out.push_str("  i64.add  ;; add two i64\n");
+                    continue;
+                } else if l == "F32Add" {
+                    out.push_str("  f32.add  ;; add two f32\n");
+                    continue;
+                } else if l == "F64Add" {
+                    out.push_str("  f64.add  ;; add two f64\n");
+                    continue;
+                } else if l == "Return" {
+                    out.push_str("  return\n");
+                    continue;
+                }
+                // passthrough lines like headers and unknown operators
+                out.push_str(line);
+                out.push('\n');
+            }
+            out
+        };
+
+        // Split horizontally
+        let cols = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(area);
+
+        let hex_widget =
+            Paragraph::new(hex_text).block(Block::default().borders(Borders::ALL).title(" Hex "));
+        let wat_widget = Paragraph::new(wat_text)
+            .block(Block::default().borders(Borders::ALL).title(" WAT "))
+            .scroll((app.wat_scroll, 0));
+
+        f.render_widget(hex_widget, cols[0]);
+        f.render_widget(wat_widget, cols[1]);
+        return;
+    }
+
+    // Graph mode rendering
+    if app.graph_mode {
+        // Build visible rows
+        let rows = app.visible_tree_rows().unwrap_or_default();
+
+        // Header with cumulative size for root
+        let mut header_cells = vec![
+            Cell::from("Name").style(
+                Style::default()
+                    .fg(Color::Magenta)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Cell::from("Self").style(
+                Style::default()
+                    .fg(Color::Magenta)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Cell::from("Cumulative").style(
+                Style::default()
+                    .fg(Color::Magenta)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Cell::from("Idx").style(
+                Style::default()
+                    .fg(Color::Magenta)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ];
+        let header = Row::new(header_cells).style(Style::default()).height(1);
+
+        let mut table_rows: Vec<Row> = Vec::new();
+
+        if rows.is_empty() {
+            let row = Row::new(vec![
+                Cell::from("No root selected (press g on a function)"),
+                Cell::from(""),
+                Cell::from(""),
+                Cell::from(""),
+            ])
+            .style(Style::default().fg(Color::DarkGray));
+            table_rows.push(row);
+        } else {
+            for r in &rows {
+                // render indented name with expand/collapse marker
+                let name = if let Some(f) = app.module.functions.iter().find(|f| f.index == r.index)
+                {
+                    display_name(f, app.raw_names)
+                } else {
+                    format!("func[{}]", r.index)
+                };
+                let marker = if app
+                    .call_graph
+                    .edges
+                    .get(&r.index)
+                    .map(|v| !v.is_empty())
+                    .unwrap_or(false)
+                {
+                    if app.expanded.contains(&r.index) {
+                        "[-] "
+                    } else {
+                        "[+] "
+                    }
+                } else {
+                    "    "
+                };
+                let indirect_tag = if r.has_indirect { " [indirect]" } else { "" };
+                let cycle_tag = if r.is_cycle { " [cycle]" } else { "" };
+                let indent = "  ".repeat(r.depth);
+                let display = format!("{}{}{}{}{}", indent, marker, name, indirect_tag, cycle_tag);
+
+                // self size
+                let self_size = app
+                    .module
+                    .functions
+                    .iter()
+                    .find(|f| f.index == r.index)
+                    .map(|f| f.code_size)
+                    .unwrap_or(0);
+
+                // cumulative unique size
+                let (cum, _) = unique_cumulative_size(r.index, &app.module, &app.call_graph);
+
+                let cells = vec![
+                    Cell::from(display),
+                    Cell::from(format!("{}", self_size)),
+                    Cell::from(format!("{}", cum)),
+                    Cell::from(format!("{}", r.index)),
+                ];
+                table_rows.push(Row::new(cells).height(1));
+            }
+        }
+
+        let widths = [
+            Constraint::Min(20),    // Name
+            Constraint::Length(12), // Self
+            Constraint::Length(14), // Cumulative
+            Constraint::Length(8),  // Idx
+        ];
+
+        let table = Table::new(table_rows, widths)
+            .header(header)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" Call Graph (g to toggle) "),
+            )
+            .highlight_style(Style::default().fg(Color::Black).bg(Color::White))
+            .column_spacing(1);
+
+        let mut state = TableState::default();
+        if !rows.is_empty() {
+            let clamp = rows.len().saturating_sub(1);
+            let sel = app.tree_selected.min(clamp);
+            state.select(Some(sel));
+        }
+        f.render_stateful_widget(table, area, &mut state);
+        return;
+    }
+
+    // Default list mode rendering
     let header_cells = ["Rank", "%", "Size", "Index", "Name"].into_iter().map(|h| {
         Cell::from(h).style(
             Style::default()
@@ -528,7 +1023,6 @@ fn draw_footer(f: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
         return;
     }
 
-    // Default help text (dynamic name mode indicator)
     let help = Line::from(vec![
         Span::styled(
             "q",
@@ -544,6 +1038,20 @@ fn draw_footer(f: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw(" filter  "),
+        Span::styled(
+            "g",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" graph  "),
+        Span::styled(
+            "i",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" inspect  "),
         Span::styled(
             "c",
             Style::default()
@@ -569,7 +1077,19 @@ fn draw_footer(f: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw(" navigate"),
+        Span::raw(if app.graph_mode {
+            if app.inspect_mode {
+                " navigate (h/l collapse/expand, Enter expand, PgUp/PgDn scroll)"
+            } else {
+                " navigate (h/l collapse/expand, Enter expand)"
+            }
+        } else {
+            if app.inspect_mode {
+                " navigate (PgUp/PgDn scroll)"
+            } else {
+                " navigate"
+            }
+        }),
     ]);
     let p = Paragraph::new(help).block(block);
     f.render_widget(p, area);

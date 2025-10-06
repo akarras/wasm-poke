@@ -5,7 +5,7 @@ use std::path::Path;
 use anyhow::{anyhow, Context, Result};
 use rustc_demangle::try_demangle;
 use serde::{Deserialize, Serialize};
-use wasmparser::{ExternalKind, Name, NameSectionReader, Parser, Payload, TypeRef};
+use wasmparser::{ExternalKind, Name, NameSectionReader, Operator, Parser, Payload, TypeRef};
 
 /// Information about a single (defined) function in the module.
 ///
@@ -259,6 +259,114 @@ pub fn function_matches(func: &FunctionInfo, pattern: &str) -> bool {
     false
 }
 
+/// Call graph of direct calls between functions identified by global indices.
+/// - `edges[src] = Vec<dst>` where each entry is a direct `call` target
+/// - `has_indirect[src] = true` if the function contains any `call_indirect`
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CallGraph {
+    pub edges: HashMap<u32, Vec<u32>>,
+    pub has_indirect: HashMap<u32, bool>,
+}
+
+/// Build a direct call graph by scanning operators in each defined function body.
+/// - Only direct `call` operators contribute edges
+/// - `call_indirect` is recorded via `has_indirect` but no edges are added
+pub fn build_call_graph(bytes: &[u8]) -> Result<CallGraph> {
+    let mut imported_funcs: u32 = 0;
+    let mut defined_funcs_seen: u32 = 0;
+
+    let mut graph = CallGraph::default();
+
+    for payload in Parser::new(0).parse_all(bytes) {
+        let payload = payload?;
+        match payload {
+            Payload::ImportSection(s) => {
+                for import in s {
+                    let import = import?;
+                    if matches!(import.ty, TypeRef::Func(_)) {
+                        imported_funcs = imported_funcs
+                            .checked_add(1)
+                            .ok_or_else(|| anyhow!("imported function count overflow"))?;
+                    }
+                }
+            }
+            Payload::CodeSectionEntry(body) => {
+                // current function (global index)
+                let defined_idx = defined_funcs_seen;
+                let src = imported_funcs
+                    .checked_add(defined_idx)
+                    .ok_or_else(|| anyhow!("function index overflow"))?;
+
+                // ensure entries
+                graph.edges.entry(src).or_default();
+                graph.has_indirect.entry(src).or_insert(false);
+
+                // iterate operators and collect direct call targets
+                let mut ops = body.get_operators_reader()?;
+                while !ops.eof() {
+                    let op = ops.read()?;
+                    match op {
+                        Operator::Call { function_index } => {
+                            graph.edges.entry(src).or_default().push(function_index);
+                        }
+                        Operator::CallIndirect { .. } => {
+                            graph.has_indirect.insert(src, true);
+                        }
+                        _ => {}
+                    }
+                }
+
+                defined_funcs_seen += 1;
+            }
+            _ => {}
+        }
+    }
+
+    Ok(graph)
+}
+
+/// Compute the cumulative unique size (in bytes) reachable from `root` via direct calls.
+/// - Sizes are taken from `module` (defined functions only); imports have no size
+/// - Each reachable function's size is counted at most once (no double counting)
+/// Returns (total_bytes, unique_node_count)
+pub fn unique_cumulative_size(
+    root: u32,
+    module: &WasmModuleInfo,
+    graph: &CallGraph,
+) -> (u64, usize) {
+    use std::collections::{HashMap as Map, HashSet};
+
+    // Map global index -> size for defined functions
+    let mut size_map: Map<u32, u32> = Map::with_capacity(module.functions.len());
+    for f in &module.functions {
+        size_map.insert(f.index, f.code_size);
+    }
+
+    let mut visited: HashSet<u32> = HashSet::new();
+    let mut stack: Vec<u32> = vec![root];
+    let mut total: u64 = 0;
+
+    while let Some(node) = stack.pop() {
+        if visited.contains(&node) {
+            continue;
+        }
+        visited.insert(node);
+        if let Some(sz) = size_map.get(&node) {
+            total = total.saturating_add(*sz as u64);
+        }
+        if let Some(children) = graph.edges.get(&node) {
+            // push children in reverse so earlier ones appear first when popping
+            for &c in children.iter().rev() {
+                if !visited.contains(&c) {
+                    stack.push(c);
+                }
+            }
+        }
+    }
+
+    (total, visited.len())
+}
+
 /// Minimal wildcard matcher supporting only `*` (matches any sequence, including empty).
 /// Case-sensitive, literal match for all other characters.
 pub fn wildcard_match(s: &str, pat: &str) -> bool {
@@ -343,6 +451,290 @@ pub fn wildcard_match(s: &str, pat: &str) -> bool {
     // If ends_with_star is true, trailing chars are allowed.
     // If tokens ended with empty due to trailing '*', handled by ends_with_star.
     true
+}
+
+// Inspect utilities
+
+/// Return the raw function body bytes for a given global function index, if available.
+/// Uses `WasmModuleInfo.body_range` to slice into the original wasm bytes.
+/// Returns None if the function is not found or has no recorded body range (e.g., import).
+pub fn function_body_bytes<'a>(
+    module: &WasmModuleInfo,
+    wasm_bytes: &'a [u8],
+    func_index: u32,
+) -> Option<&'a [u8]> {
+    let f = module.functions.iter().find(|f| f.index == func_index)?;
+    let range = f.body_range.as_ref()?;
+    if range.end <= wasm_bytes.len() {
+        Some(&wasm_bytes[range.start..range.end])
+    } else {
+        None
+    }
+}
+
+/// Produce a simple hex dump (with ASCII gutter) of the provided bytes.
+/// `width` controls the number of bytes per line (commonly 16).
+pub fn hexdump(bytes: &[u8], width: usize) -> String {
+    let mut out = String::new();
+    if width == 0 {
+        return out;
+    }
+    let mut offset: usize = 0;
+    while offset < bytes.len() {
+        let end = (offset + width).min(bytes.len());
+        let slice = &bytes[offset..end];
+
+        // offset
+        out.push_str(&format!("{:08x}: ", offset));
+
+        // hex bytes
+        for i in 0..width {
+            if offset + i < end {
+                out.push_str(&format!("{:02x} ", slice[i]));
+            } else {
+                out.push_str("   ");
+            }
+        }
+
+        // ascii gutter
+        out.push_str(" |");
+        for &b in slice {
+            let ch = if b.is_ascii_graphic() || b == b' ' {
+                b as char
+            } else {
+                '.'
+            };
+            out.push(ch);
+        }
+        out.push_str("|\n");
+
+        offset += width;
+    }
+    out
+}
+
+/// Disassemble a single function into a readable, WAT-like representation.
+/// Notes:
+/// - This is not a full WAT printer; it lists locals and operators using wasmparser's operator decoding.
+/// - Useful for quick inspection alongside the hex dump.
+/// - Only direct function selection by global index is supported.
+/// - Indirect calls will appear as `CallIndirect` operators.
+pub fn disassemble_function_wat_bytes(wasm_bytes: &[u8], target_func_index: u32) -> Result<String> {
+    let mut imported_funcs: u32 = 0;
+    let mut defined_funcs_seen: u32 = 0;
+
+    for payload in Parser::new(0).parse_all(wasm_bytes) {
+        let payload = payload?;
+        match payload {
+            Payload::ImportSection(s) => {
+                for import in s {
+                    let import = import?;
+                    if matches!(import.ty, TypeRef::Func(_)) {
+                        imported_funcs = imported_funcs
+                            .checked_add(1)
+                            .ok_or_else(|| anyhow!("imported function count overflow"))?;
+                    }
+                }
+            }
+            Payload::CodeSectionEntry(body) => {
+                let defined_idx = defined_funcs_seen;
+                let this_global = imported_funcs
+                    .checked_add(defined_idx)
+                    .ok_or_else(|| anyhow!("function index overflow"))?;
+
+                if this_global == target_func_index {
+                    let mut out = String::new();
+                    out.push_str(&format!(";; func [{}]\n", target_func_index));
+                    out.push_str("(func\n");
+
+                    // Locals
+                    let mut locals_reader = body.get_locals_reader()?;
+                    if locals_reader.get_count() > 0 {
+                        out.push_str("  ;; locals:\n");
+                        for _ in 0..locals_reader.get_count() {
+                            let (cnt, ty) = locals_reader.read()?;
+                            out.push_str(&format!("  ;;   count={} type={:?}\n", cnt, ty));
+                        }
+                    }
+
+                    // Operators (pretty WAT-like mnemonics with brief comments)
+                    out.push_str("  ;; body\n");
+                    let mut ops = body.get_operators_reader()?;
+                    while !ops.eof() {
+                        let op = ops.read()?;
+                        match op {
+                            // constants
+                            Operator::I32Const { value } => {
+                                out.push_str(&format!("  i32.const {}\n", value));
+                            }
+                            Operator::I64Const { value } => {
+                                out.push_str(&format!("  i64.const {}\n", value));
+                            }
+                            Operator::F32Const { value } => {
+                                let bits = value.bits();
+                                let val = f32::from_bits(bits);
+                                out.push_str(&format!(
+                                    "  f32.const {}  ;; bits=0x{:08x}\n",
+                                    val, bits
+                                ));
+                            }
+                            Operator::F64Const { value } => {
+                                let bits = value.bits();
+                                let val = f64::from_bits(bits);
+                                out.push_str(&format!(
+                                    "  f64.const {}  ;; bits=0x{:016x}\n",
+                                    val, bits
+                                ));
+                            }
+
+                            // locals/globals
+                            Operator::LocalGet { local_index } => {
+                                out.push_str(&format!("  local.get {}\n", local_index));
+                            }
+                            Operator::LocalSet { local_index } => {
+                                out.push_str(&format!("  local.set {}\n", local_index));
+                            }
+                            Operator::LocalTee { local_index } => {
+                                out.push_str(&format!("  local.tee {}\n", local_index));
+                            }
+                            Operator::GlobalGet { global_index } => {
+                                out.push_str(&format!("  global.get {}\n", global_index));
+                            }
+                            Operator::GlobalSet { global_index } => {
+                                out.push_str(&format!("  global.set {}\n", global_index));
+                            }
+
+                            // calls
+                            Operator::Call { function_index } => {
+                                out.push_str(&format!("  call {}\n", function_index));
+                            }
+                            Operator::CallIndirect { .. } => {
+                                out.push_str("  call_indirect  ;; indirect call\n");
+                            }
+
+                            // numeric ops (common)
+                            Operator::I32Add => out.push_str("  i32.add\n"),
+                            Operator::I32Sub => out.push_str("  i32.sub\n"),
+                            Operator::I32Mul => out.push_str("  i32.mul\n"),
+                            Operator::I64Add => out.push_str("  i64.add\n"),
+                            Operator::I64Sub => out.push_str("  i64.sub\n"),
+                            Operator::I64Mul => out.push_str("  i64.mul\n"),
+                            Operator::F32Add => out.push_str("  f32.add\n"),
+                            Operator::F32Sub => out.push_str("  f32.sub\n"),
+                            Operator::F32Mul => out.push_str("  f32.mul\n"),
+                            Operator::F64Add => out.push_str("  f64.add\n"),
+                            Operator::F64Sub => out.push_str("  f64.sub\n"),
+                            Operator::F64Mul => out.push_str("  f64.mul\n"),
+
+                            // comparisons (subset)
+                            Operator::I32Eq => out.push_str("  i32.eq\n"),
+                            Operator::I32Ne => out.push_str("  i32.ne\n"),
+                            Operator::I32LtS => out.push_str("  i32.lt_s\n"),
+                            Operator::I32LtU => out.push_str("  i32.lt_u\n"),
+                            Operator::I32GtS => out.push_str("  i32.gt_s\n"),
+                            Operator::I32GtU => out.push_str("  i32.gt_u\n"),
+
+                            // memory loads/stores (subset)
+                            Operator::I32Load { memarg } => {
+                                let align = 1u64 << memarg.align;
+                                out.push_str(&format!(
+                                    "  i32.load offset={} align={}\n",
+                                    memarg.offset, align
+                                ));
+                            }
+                            Operator::I64Load { memarg } => {
+                                let align = 1u64 << memarg.align;
+                                out.push_str(&format!(
+                                    "  i64.load offset={} align={}\n",
+                                    memarg.offset, align
+                                ));
+                            }
+                            Operator::F32Load { memarg } => {
+                                let align = 1u64 << memarg.align;
+                                out.push_str(&format!(
+                                    "  f32.load offset={} align={}\n",
+                                    memarg.offset, align
+                                ));
+                            }
+                            Operator::F64Load { memarg } => {
+                                let align = 1u64 << memarg.align;
+                                out.push_str(&format!(
+                                    "  f64.load offset={} align={}\n",
+                                    memarg.offset, align
+                                ));
+                            }
+                            Operator::I32Store { memarg } => {
+                                let align = 1u64 << memarg.align;
+                                out.push_str(&format!(
+                                    "  i32.store offset={} align={}\n",
+                                    memarg.offset, align
+                                ));
+                            }
+                            Operator::I64Store { memarg } => {
+                                let align = 1u64 << memarg.align;
+                                out.push_str(&format!(
+                                    "  i64.store offset={} align={}\n",
+                                    memarg.offset, align
+                                ));
+                            }
+                            Operator::F32Store { memarg } => {
+                                let align = 1u64 << memarg.align;
+                                out.push_str(&format!(
+                                    "  f32.store offset={} align={}\n",
+                                    memarg.offset, align
+                                ));
+                            }
+                            Operator::F64Store { memarg } => {
+                                let align = 1u64 << memarg.align;
+                                out.push_str(&format!(
+                                    "  f64.store offset={} align={}\n",
+                                    memarg.offset, align
+                                ));
+                            }
+
+                            // control flow (flat; not managing indentation here)
+                            Operator::Block { .. } => out.push_str("  block\n"),
+                            Operator::Loop { .. } => out.push_str("  loop\n"),
+                            Operator::If { .. } => out.push_str("  if\n"),
+                            Operator::Else => out.push_str("  else\n"),
+                            Operator::End => out.push_str("  end\n"),
+                            Operator::Br { relative_depth } => {
+                                out.push_str(&format!("  br {}\n", relative_depth));
+                            }
+                            Operator::BrIf { relative_depth } => {
+                                out.push_str(&format!("  br_if {}\n", relative_depth));
+                            }
+                            Operator::BrTable { .. } => {
+                                out.push_str("  br_table  ;; branch table\n");
+                            }
+
+                            // misc
+                            Operator::Return => out.push_str("  return\n"),
+                            Operator::Drop => out.push_str("  drop\n"),
+                            Operator::Select => out.push_str("  select\n"),
+                            Operator::Nop => out.push_str("  nop\n"),
+                            Operator::Unreachable => out.push_str("  unreachable\n"),
+                            Operator::MemoryGrow { .. } => out.push_str("  memory.grow\n"),
+                            Operator::MemorySize { .. } => out.push_str("  memory.size\n"),
+
+                            // default: leave a comment with the raw debug form
+                            _ => {
+                                out.push_str(&format!("  ;; {:?}\n", op));
+                            }
+                        }
+                    }
+
+                    out.push_str(")\n");
+                    return Ok(out);
+                }
+
+                defined_funcs_seen += 1;
+            }
+            _ => {}
+        }
+    }
+
+    Err(anyhow!("function index {} not found", target_func_index))
 }
 
 #[cfg(test)]
