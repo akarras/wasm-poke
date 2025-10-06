@@ -141,6 +141,8 @@ struct App {
     inspect_mode: bool,
     // scroll offset for WAT pane (in lines)
     wat_scroll: u16,
+    // scroll offset for Source pane (in lines)
+    source_scroll: u16,
 }
 
 impl App {
@@ -170,6 +172,7 @@ impl App {
             tree_selected: 0,
             inspect_mode: false,
             wat_scroll: 0,
+            source_scroll: 0,
         };
         app.refresh_indices();
         app
@@ -243,6 +246,7 @@ impl App {
                     }
                     if self.inspect_mode {
                         self.wat_scroll = 0;
+                        self.source_scroll = 0;
                     }
                 }
                 KeyCode::Char('j') | KeyCode::Down => {
@@ -251,6 +255,7 @@ impl App {
                     self.tree_selected = self.tree_selected.saturating_add(1);
                     if self.inspect_mode {
                         self.wat_scroll = 0;
+                        self.source_scroll = 0;
                     }
                 }
                 KeyCode::Left | KeyCode::Char('h') => {
@@ -294,9 +299,10 @@ impl App {
                         }
                     }
                 }
-                KeyCode::PageUp => {
+                KeyCode::PageUp | KeyCode::Char('u') => {
                     if self.inspect_mode {
                         self.wat_scroll = self.wat_scroll.saturating_sub(10);
+                        self.source_scroll = self.source_scroll.saturating_sub(10);
                     } else {
                         let step = 10usize;
                         if self.tree_selected >= step {
@@ -306,9 +312,10 @@ impl App {
                         }
                     }
                 }
-                KeyCode::PageDown => {
+                KeyCode::PageDown | KeyCode::Char('d') => {
                     if self.inspect_mode {
                         self.wat_scroll = self.wat_scroll.saturating_add(10);
+                        self.source_scroll = self.source_scroll.saturating_add(10);
                     } else {
                         let step = 10usize;
                         if let Some(rows) = self.visible_tree_rows() {
@@ -330,6 +337,7 @@ impl App {
                     } else {
                         self.inspect_mode = true;
                         self.wat_scroll = 0;
+                        self.source_scroll = 0;
                     }
                 }
                 _ => {}
@@ -373,6 +381,7 @@ impl App {
                 }
                 if self.inspect_mode {
                     self.wat_scroll = 0;
+                    self.source_scroll = 0;
                 }
             }
             KeyCode::Char('j') | KeyCode::Down => {
@@ -381,11 +390,13 @@ impl App {
                 }
                 if self.inspect_mode {
                     self.wat_scroll = 0;
+                    self.source_scroll = 0;
                 }
             }
             KeyCode::PageUp => {
                 if self.inspect_mode {
                     self.wat_scroll = self.wat_scroll.saturating_sub(10);
+                    self.source_scroll = self.source_scroll.saturating_sub(10);
                 } else {
                     let step = 10usize;
                     if self.selected >= step {
@@ -398,6 +409,7 @@ impl App {
             KeyCode::PageDown => {
                 if self.inspect_mode {
                     self.wat_scroll = self.wat_scroll.saturating_add(10);
+                    self.source_scroll = self.source_scroll.saturating_add(10);
                 } else {
                     let step = 10usize;
                     self.selected =
@@ -732,20 +744,67 @@ fn draw_table(f: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
             out
         };
 
-        // Split horizontally
+        // Split horizontally into three panes: Hex | WAT | Source
         let cols = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .constraints([
+                Constraint::Percentage(34),
+                Constraint::Percentage(33),
+                Constraint::Percentage(33),
+            ])
             .split(area);
 
         let hex_widget =
             Paragraph::new(hex_text).block(Block::default().borders(Borders::ALL).title(" Hex "));
+        // Attempt to resolve a source location for this function (first instruction as heuristic)
+        let loc_opt = wasm_poke::map_instr_to_source(&app.wasm_bytes, current_index, 0);
+        // Prepend a source header to the WAT view if available
+        let wat_text = if let Some(ref loc) = loc_opt {
+            format!(
+                ";; source: {}:{}:{}\n{}",
+                loc.file, loc.line, loc.column, wat_text
+            )
+        } else {
+            wat_text
+        };
         let wat_widget = Paragraph::new(wat_text)
             .block(Block::default().borders(Borders::ALL).title(" WAT "))
             .scroll((app.wat_scroll, 0));
+        let span_opt = wasm_poke::function_source_span(&app.wasm_bytes, current_index);
+        let source_text = if let Some(span) = span_opt {
+            match std::fs::read_to_string(&span.file) {
+                Ok(src) => {
+                    let lines: Vec<&str> = src.lines().collect();
+                    let start = (span.start_line as usize).saturating_sub(1);
+                    let end = (span.end_line as usize).min(lines.len());
+                    let mut buf = String::new();
+                    for i in start..end {
+                        let ln = i + 1;
+                        let marker = if (ln as u32) == span.start_line {
+                            ">"
+                        } else {
+                            " "
+                        };
+                        let content = lines[i];
+                        buf.push_str(&format!("{marker} {:5} | {content}\n", ln));
+                    }
+                    buf
+                }
+                Err(_) => format!(
+                    "{}:{}:{}-{}:{}",
+                    span.file, span.start_line, span.start_column, span.end_line, span.end_column
+                ),
+            }
+        } else {
+            "No source mapping available.\nBuild with debug information (DWARF) to enable source pane.".to_string()
+        };
+        let source_widget = Paragraph::new(source_text)
+            .block(Block::default().borders(Borders::ALL).title(" Source "))
+            .scroll((app.source_scroll, 0));
 
         f.render_widget(hex_widget, cols[0]);
         f.render_widget(wat_widget, cols[1]);
+        f.render_widget(source_widget, cols[2]);
         return;
     }
 
@@ -1079,13 +1138,13 @@ fn draw_footer(f: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
         ),
         Span::raw(if app.graph_mode {
             if app.inspect_mode {
-                " navigate (h/l collapse/expand, Enter expand, PgUp/PgDn scroll)"
+                " navigate (h/l collapse/expand, Enter expand, PgUp/PgDn WAT, u/d Source)"
             } else {
                 " navigate (h/l collapse/expand, Enter expand)"
             }
         } else {
             if app.inspect_mode {
-                " navigate (PgUp/PgDn scroll)"
+                " navigate (PgUp/PgDn WAT, u/d Source)"
             } else {
                 " navigate"
             }
