@@ -241,21 +241,23 @@ impl App {
                     self.graph_mode = false;
                 }
                 KeyCode::Char('k') | KeyCode::Up => {
-                    if self.tree_selected > 0 {
-                        self.tree_selected -= 1;
-                    }
                     if self.inspect_mode {
-                        self.wat_scroll = 0;
-                        self.source_scroll = 0;
+                        self.wat_scroll = self.wat_scroll.saturating_sub(1);
+                        self.source_scroll = self.source_scroll.saturating_sub(1);
+                    } else {
+                        if self.tree_selected > 0 {
+                            self.tree_selected -= 1;
+                        }
                     }
                 }
                 KeyCode::Char('j') | KeyCode::Down => {
-                    // clamp to current visible rows length (computed in draw)
-                    // safe fallback: increment, will be clamped in draw selection
-                    self.tree_selected = self.tree_selected.saturating_add(1);
                     if self.inspect_mode {
-                        self.wat_scroll = 0;
-                        self.source_scroll = 0;
+                        self.wat_scroll = self.wat_scroll.saturating_add(1);
+                        self.source_scroll = self.source_scroll.saturating_add(1);
+                    } else {
+                        // clamp to current visible rows length (computed in draw)
+                        // safe fallback: increment, will be clamped in draw selection
+                        self.tree_selected = self.tree_selected.saturating_add(1);
                     }
                 }
                 KeyCode::Left | KeyCode::Char('h') => {
@@ -376,21 +378,23 @@ impl App {
                 self.raw_names = !self.raw_names;
             }
             KeyCode::Char('k') | KeyCode::Up => {
-                if self.selected > 0 {
-                    self.selected -= 1;
-                }
                 if self.inspect_mode {
-                    self.wat_scroll = 0;
-                    self.source_scroll = 0;
+                    self.wat_scroll = self.wat_scroll.saturating_sub(1);
+                    self.source_scroll = self.source_scroll.saturating_sub(1);
+                } else {
+                    if self.selected > 0 {
+                        self.selected -= 1;
+                    }
                 }
             }
             KeyCode::Char('j') | KeyCode::Down => {
-                if self.selected + 1 < self.indices.len() {
-                    self.selected += 1;
-                }
                 if self.inspect_mode {
-                    self.wat_scroll = 0;
-                    self.source_scroll = 0;
+                    self.wat_scroll = self.wat_scroll.saturating_add(1);
+                    self.source_scroll = self.source_scroll.saturating_add(1);
+                } else {
+                    if self.selected + 1 < self.indices.len() {
+                        self.selected += 1;
+                    }
                 }
             }
             KeyCode::PageUp => {
@@ -798,9 +802,18 @@ fn draw_table(f: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
         } else {
             "No source mapping available.\nBuild with debug information (DWARF) to enable source pane.".to_string()
         };
+        // Clamp Source scroll to content height so it doesn't scroll off the page
+        let total_source_lines: u16 = source_text.lines().count() as u16;
+        let visible_source_lines: u16 = cols[2].height.saturating_sub(2); // minus borders
+        let max_source_scroll: u16 = if total_source_lines > visible_source_lines {
+            total_source_lines - visible_source_lines
+        } else {
+            0
+        };
+        let clamped_source_scroll: u16 = app.source_scroll.min(max_source_scroll);
         let source_widget = Paragraph::new(source_text)
             .block(Block::default().borders(Borders::ALL).title(" Source "))
-            .scroll((app.source_scroll, 0));
+            .scroll((clamped_source_scroll, 0));
 
         f.render_widget(hex_widget, cols[0]);
         f.render_widget(wat_widget, cols[1]);
@@ -811,7 +824,47 @@ fn draw_table(f: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
     // Graph mode rendering
     if app.graph_mode {
         // Build visible rows
-        let rows = app.visible_tree_rows().unwrap_or_default();
+        let mut rows = app.visible_tree_rows().unwrap_or_default();
+        // Apply filter in call graph: keep rows that match or are ancestors of a match
+        if !app.filter.is_empty() {
+            let pat = if app.filter.contains('*') {
+                app.filter.clone()
+            } else {
+                format!("*{}*", app.filter)
+            };
+            // Compute match flags per row
+            let mut match_flags: Vec<bool> = Vec::with_capacity(rows.len());
+            for r in &rows {
+                let is_match =
+                    if let Some(f) = app.module.functions.iter().find(|f| f.index == r.index) {
+                        wasm_poke::function_matches(f, &pat)
+                    } else {
+                        false
+                    };
+                match_flags.push(is_match);
+            }
+            // Mark ancestors of matches
+            let mut keep: Vec<bool> = vec![false; rows.len()];
+            let mut stack: Vec<usize> = Vec::new(); // indices of ancestors by depth
+            for (i, r) in rows.iter().enumerate() {
+                while stack.len() > r.depth {
+                    stack.pop();
+                }
+                if match_flags[i] {
+                    keep[i] = true;
+                    for &anc in &stack {
+                        keep[anc] = true;
+                    }
+                }
+                stack.push(i);
+            }
+            // Filter rows
+            rows = rows
+                .into_iter()
+                .zip(keep.into_iter())
+                .filter_map(|(r, k)| if k { Some(r) } else { None })
+                .collect();
+        }
 
         // Header with cumulative size for root
         let mut header_cells = vec![
@@ -1138,13 +1191,13 @@ fn draw_footer(f: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
         ),
         Span::raw(if app.graph_mode {
             if app.inspect_mode {
-                " navigate (h/l collapse/expand, Enter expand, PgUp/PgDn WAT, u/d Source)"
+                " navigate (h/l collapse/expand, Enter expand, j/k line, PgUp/PgDn WAT, u/d Source)"
             } else {
                 " navigate (h/l collapse/expand, Enter expand)"
             }
         } else {
             if app.inspect_mode {
-                " navigate (PgUp/PgDn WAT, u/d Source)"
+                " navigate (j/k line, PgUp/PgDn WAT, u/d Source)"
             } else {
                 " navigate"
             }
