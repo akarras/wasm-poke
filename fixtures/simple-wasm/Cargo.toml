@@ -1,0 +1,21 @@
+[package]
+name = "simple-wasm"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "simple_wasm"
+crate-type = ["cdylib"]
+
+# Make the wasm small and quick to build
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+
+[profile.dev]
+panic = "abort"
+opt-level = 1
