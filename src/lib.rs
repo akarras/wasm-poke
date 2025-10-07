@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::ops::Range;
 use std::path::Path;
+use std::sync::{Mutex, OnceLock};
 
 use anyhow::{anyhow, Context, Result};
 use object::{Object, ObjectSection};
@@ -461,87 +462,28 @@ pub fn wildcard_match(s: &str, pat: &str) -> bool {
 // Note: This is a placeholder API for mapping instruction offsets to source locations.
 // Full DWARF parsing and address translation will be added in a subsequent change.
 // The function returns None until DWARF/source map resolution is implemented.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SourceLocation {
-    pub file: String,
-    pub line: u32,
-    pub column: u32,
+
+// Cached DWARF/addr2line context to avoid reparsing per mapping call and to normalize addresses
+// relative to the first function body. Wrapped in a Mutex to satisfy Sync bounds for global statics.
+struct DwarfCtx {
+    ctx: addr2line::Context<gimli::EndianSlice<'static, gimli::LittleEndian>>,
+    first_body_start: usize,
 }
 
-/// Attempts to map a global function index and an operator offset within its body to a source location.
-/// - `wasm_bytes`: the entire wasm module bytes
-/// - `func_index`: global function index for the target function
-/// - `body_offset`: byte offset within the function body (relative to the start of the body)
-/// Returns a SourceLocation if debug information is available and can be resolved.
-pub fn map_instr_to_source(
-    wasm_bytes: &[u8],
-    func_index: u32,
-    body_offset: usize,
-) -> Option<SourceLocation> {
-    // 1) Determine the absolute byte offset ("address") for the given function/operator in the module.
-    let mut imported_funcs: u32 = 0;
-    let mut defined_funcs_seen: u32 = 0;
-    let mut func_body_start: Option<usize> = None;
-    let mut func_body_end: Option<usize> = None;
-    let mut first_body_start: Option<usize> = None;
+static DWARF_CONTEXT: OnceLock<Mutex<DwarfCtx>> = OnceLock::new();
 
-    for payload in wasmparser::Parser::new(0).parse_all(wasm_bytes) {
-        let payload = payload.ok()?;
-        match payload {
-            wasmparser::Payload::ImportSection(s) => {
-                for import in s {
-                    let import = import.ok()?;
-                    if matches!(import.ty, wasmparser::TypeRef::Func(_)) {
-                        imported_funcs = imported_funcs.checked_add(1)?;
-                    }
-                }
-            }
-            wasmparser::Payload::CodeSectionEntry(body) => {
-                // record the start of the first function body (code section base)
-                let r0 = body.get_binary_reader();
-                let range0 = r0.range();
-                if first_body_start.is_none() {
-                    first_body_start = Some(range0.start);
-                }
-                let this_global = imported_funcs.checked_add(defined_funcs_seen)?;
-                if this_global == func_index {
-                    let r = body.get_binary_reader();
-                    let range = r.range();
-                    func_body_start = Some(range.start);
-                    func_body_end = Some(range.end);
-                    break;
-                }
-                defined_funcs_seen += 1;
-            }
-            _ => {}
-        }
+/// Initialize and cache a global DWARF context and the first function body start offset.
+/// Returns a reference to the cached context on success.
+pub fn init_dwarf_context(wasm_bytes: &[u8]) -> Option<&'static Mutex<DwarfCtx>> {
+    if let Some(existing) = DWARF_CONTEXT.get() {
+        return Some(existing);
     }
 
-    let body_start = func_body_start?;
-    let first_start = first_body_start?;
-    let address = (body_start.saturating_sub(first_start) + body_offset) as u64;
-
-    // 2) Parse DWARF debug sections via `object`, build a gimli::Dwarf, then an addr2line context.
+    // Parse sections once and leak them to obtain 'static lifetimes for EndianSlice.
     let obj = object::File::parse(wasm_bytes).ok()?;
-
-    let load_owned = |name: &str| -> Vec<u8> {
-        if let Some(sec) = obj.section_by_name(name) {
-            if let Ok(cow) = sec.uncompressed_data() {
-                cow.into_owned()
-            } else {
-                match sec.data() {
-                    Ok(d) => d.to_vec(),
-                    Err(_) => Vec::new(),
-                }
-            }
-        } else {
-            Vec::new()
-        }
-    };
-
-    // Collect commonly-used DWARF sections for addr2line
-    let mut sec_map: std::collections::HashMap<&'static str, Vec<u8>> =
+    let mut sec_map: std::collections::HashMap<&'static str, &'static [u8]> =
         std::collections::HashMap::new();
+
     for name in [
         ".debug_abbrev",
         ".debug_info",
@@ -557,50 +499,218 @@ pub fn map_instr_to_source(
         ".debug_loc",
         ".debug_types",
     ] {
-        let data = load_owned(name);
-        if !data.is_empty() {
-            sec_map.insert(name, data);
+        if let Some(sec) = obj.section_by_name(name) {
+            let data = if let Ok(cow) = sec.uncompressed_data() {
+                cow.into_owned()
+            } else {
+                match sec.data() {
+                    Ok(d) => d.to_vec(),
+                    Err(_) => Vec::new(),
+                }
+            };
+            if !data.is_empty() {
+                let leaked: &'static [u8] = Box::leak(data.into_boxed_slice());
+                sec_map.insert(name, leaked);
+            }
         }
     }
 
     let endian = gimli::LittleEndian;
     let dwarf = gimli::Dwarf::load(|id| {
         let name = id.name();
-        let data = sec_map.get(name).map(|v| v.as_slice()).unwrap_or(&[]);
-        Ok::<gimli::EndianSlice<'_, gimli::LittleEndian>, gimli::Error>(gimli::EndianSlice::new(
-            data, endian,
-        ))
+        let data = sec_map.get(name).copied().unwrap_or(&[]);
+        Ok::<gimli::EndianSlice<'static, gimli::LittleEndian>, gimli::Error>(
+            gimli::EndianSlice::new(data, endian),
+        )
     })
     .ok()?;
 
     let ctx = addr2line::Context::from_dwarf(dwarf).ok()?;
 
-    // 3) Resolve address to source location.
-    let mut loc = ctx.find_location(address).ok().flatten();
+    // Compute first function body start once for module-relative address translation
+    let mut first_body_start: usize = 0;
+    for payload in wasmparser::Parser::new(0).parse_all(wasm_bytes) {
+        if let Ok(wasmparser::Payload::CodeSectionEntry(body)) = payload {
+            first_body_start = body.get_binary_reader().range().start;
+            break;
+        }
+    }
+
+    let _ = DWARF_CONTEXT.set(Mutex::new(DwarfCtx {
+        ctx,
+        first_body_start,
+    }));
+    DWARF_CONTEXT.get()
+}
+
+/// Fast mapping helper that avoids scanning the entire wasm by using precomputed module body ranges.
+
+pub fn map_instr_to_source_fast(
+    module: &WasmModuleInfo,
+    wasm_bytes: &[u8],
+    func_index: u32,
+    body_offset: usize,
+) -> Option<SourceLocation> {
+    let f = module.functions.iter().find(|f| f.index == func_index)?;
+
+    let range = f.body_range.as_ref()?;
+
+    let dc = if let Some(m) = DWARF_CONTEXT.get() {
+        m.lock().ok()?
+    } else {
+        init_dwarf_context(wasm_bytes)?.lock().ok()?
+    };
+
+    let base = range.start.saturating_sub(dc.first_body_start);
+
+    let address = (base + body_offset) as u64;
+
+    let mut loc = dc.ctx.find_location(address).ok().flatten();
+
     if loc.is_none() {
-        if let (Some(start), Some(end), Some(first)) =
-            (func_body_start, func_body_end, first_body_start)
-        {
-            let body_len = end.saturating_sub(start);
-            let max_probe = body_len.min(4096);
-            for delta in 0..max_probe {
-                let probe_addr = (start.saturating_sub(first) + delta) as u64;
-                if let Ok(found) = ctx.find_location(probe_addr) {
-                    if found.is_some() {
-                        loc = found;
-                        break;
-                    }
+        let max_probe = 4096usize;
+
+        for delta in 0..max_probe {
+            let probe_addr = (base + delta) as u64;
+
+            if let Ok(found) = dc.ctx.find_location(probe_addr) {
+                if found.is_some() {
+                    loc = found;
+
+                    break;
                 }
             }
         }
     }
+
     let loc = loc?;
+
     let file = loc
         .file
         .as_ref()
         .map(|f| f.to_string())
         .unwrap_or_else(|| "<unknown>".to_string());
+
     let line = loc.line.unwrap_or(0);
+
+    let column = loc.column.unwrap_or(0);
+
+    Some(SourceLocation { file, line, column })
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+
+pub struct SourceLocation {
+    pub file: String,
+
+    pub line: u32,
+
+    pub column: u32,
+}
+
+/// Attempts to map a global function index and an operator offset within its body to a source location.
+/// - `wasm_bytes`: the entire wasm module bytes
+/// - `func_index`: global function index for the target function
+/// - `body_offset`: byte offset within the function body (relative to the start of the body)
+/// Returns a SourceLocation if debug information is available and can be resolved.
+
+// Cached DWARF/addr2line context to avoid reparsing per mapping call and
+// to normalize addresses relative to the first function body.
+
+/// Initialize and cache a global DWARF context and the first function body start offset.
+/// Returns a reference to the cached context on success.
+
+pub fn map_instr_to_source(
+    wasm_bytes: &[u8],
+
+    func_index: u32,
+
+    body_offset: usize,
+) -> Option<SourceLocation> {
+    // Ensure DWARF context is cached and locked
+    let dc = if let Some(m) = DWARF_CONTEXT.get() {
+        m.lock().ok()?
+    } else {
+        init_dwarf_context(wasm_bytes)?.lock().ok()?
+    };
+
+    // Determine function body start
+
+    let mut imported_funcs: u32 = 0;
+
+    let mut defined_funcs_seen: u32 = 0;
+
+    let mut func_body_start: Option<usize> = None;
+
+    for payload in wasmparser::Parser::new(0).parse_all(wasm_bytes) {
+        let payload = payload.ok()?;
+
+        match payload {
+            wasmparser::Payload::ImportSection(s) => {
+                for import in s {
+                    let import = import.ok()?;
+
+                    if matches!(import.ty, wasmparser::TypeRef::Func(_)) {
+                        imported_funcs = imported_funcs.checked_add(1)?;
+                    }
+                }
+            }
+
+            wasmparser::Payload::CodeSectionEntry(body) => {
+                let r = body.get_binary_reader();
+
+                let range = r.range();
+
+                let this_global = imported_funcs.checked_add(defined_funcs_seen)?;
+
+                if this_global == func_index {
+                    func_body_start = Some(range.start);
+
+                    break;
+                }
+
+                defined_funcs_seen += 1;
+            }
+
+            _ => {}
+        }
+    }
+
+    let body_start = func_body_start?;
+
+    // Normalize to module-relative address space used by addr2line
+
+    let base = body_start.saturating_sub(dc.first_body_start);
+
+    let address = (base + body_offset) as u64;
+
+    // Resolve address; if not found, probe within a small window
+    let mut loc = dc.ctx.find_location(address).ok().flatten();
+
+    if loc.is_none() {
+        for delta in 0..4096usize {
+            let probe_addr = (base + delta) as u64;
+
+            if let Ok(found) = dc.ctx.find_location(probe_addr) {
+                if found.is_some() {
+                    loc = found;
+
+                    break;
+                }
+            }
+        }
+    }
+
+    let loc = loc?;
+
+    let file = loc
+        .file
+        .as_ref()
+        .map(|f| f.to_string())
+        .unwrap_or_else(|| "<unknown>".to_string());
+
+    let line = loc.line.unwrap_or(0);
+
     let column = loc.column.unwrap_or(0);
 
     Some(SourceLocation { file, line, column })
@@ -621,10 +731,18 @@ pub struct SourceSpan {
 /// - Uses map_instr_to_source over function-body-relative offsets, picking the dominant file
 ///   (most occurrences) and min/max line range for that file.
 /// - Columns are best-effort (min for start, max for end on their respective lines).
+
 pub fn function_source_span(wasm_bytes: &[u8], func_index: u32) -> Option<SourceSpan> {
     use std::collections::HashMap as Map;
 
-    // Locate function body start/end
+    // Use global DWARF context (Mutex-backed) for all spans.
+    let dc = if let Some(m) = DWARF_CONTEXT.get() {
+        m.lock().ok()?
+    } else {
+        init_dwarf_context(wasm_bytes)?.lock().ok()?
+    };
+
+    // Locate function body start/end (module walk is cheap; DWARF stays cached).
     let mut imported_funcs: u32 = 0;
     let mut defined_funcs_seen: u32 = 0;
     let mut func_body_start: Option<usize> = None;
@@ -636,50 +754,84 @@ pub fn function_source_span(wasm_bytes: &[u8], func_index: u32) -> Option<Source
             wasmparser::Payload::ImportSection(s) => {
                 for import in s {
                     let import = import.ok()?;
+
                     if matches!(import.ty, wasmparser::TypeRef::Func(_)) {
                         imported_funcs = imported_funcs.checked_add(1)?;
                     }
                 }
             }
+
             wasmparser::Payload::CodeSectionEntry(body) => {
+                let r = body.get_binary_reader();
+
+                let range = r.range();
+
                 let this_global = imported_funcs.checked_add(defined_funcs_seen)?;
+
                 if this_global == func_index {
-                    let r = body.get_binary_reader();
-                    let range = r.range();
                     func_body_start = Some(range.start);
+
                     func_body_end = Some(range.end);
+
                     break;
                 }
+
                 defined_funcs_seen += 1;
             }
+
             _ => {}
         }
     }
 
     let start = func_body_start?;
+
     let end = func_body_end?;
+
     let body_len = end.saturating_sub(start);
+
     if body_len == 0 {
         return None;
     }
 
     // Probe offsets across the body to gather source lines grouped by file
+
     // Map: file -> (count, min_line, min_col, max_line, max_col)
+
     let mut file_stats: Map<String, (u32, u32, u32, u32, u32)> = Map::new();
 
+    // Normalize to the module-relative "address space" used by addr2line context.
+    let base = start.saturating_sub(dc.first_body_start);
+
     // Sample offsets 0..min(body_len, 8192) stepping by 4 bytes (coarse but fast)
+
     let max_probe = body_len.min(8192);
+
     let mut offset = 0usize;
+
     while offset < max_probe {
-        if let Some(loc) = map_instr_to_source(wasm_bytes, func_index, offset) {
-            let entry = file_stats
-                .entry(loc.file.clone())
-                .or_insert((0, loc.line, loc.column, loc.line, loc.column));
-            entry.0 = entry.0.saturating_add(1);
-            entry.1 = entry.1.min(loc.line);
-            entry.2 = entry.2.min(loc.column);
-            entry.3 = entry.3.max(loc.line);
-            entry.4 = entry.4.max(loc.column);
+        let address = (base + offset) as u64;
+        if let Ok(loc_opt) = dc.ctx.find_location(address) {
+            if let Some(loc) = loc_opt {
+                let entry = file_stats
+                    .entry(
+                        loc.file
+                            .as_ref()
+                            .map(|f| f.to_string())
+                            .unwrap_or_else(|| "<unknown>".to_string()),
+                    )
+                    .or_insert((0, loc.line.unwrap_or(0), loc.column.unwrap_or(0), 0, 0));
+                // Update counters and ranges
+                entry.0 = entry.0.saturating_add(1);
+
+                if let Some(l) = loc.line {
+                    entry.1 = entry.1.min(l);
+                    entry.3 = entry.3.max(l);
+                }
+                if let Some(c) = loc.column {
+                    entry.2 = entry.2.min(c);
+                    entry.4 = entry.4.max(c);
+                }
+            }
         }
         offset += 4;
     }
@@ -689,33 +841,56 @@ pub fn function_source_span(wasm_bytes: &[u8], func_index: u32) -> Option<Source
     }
 
     // Choose the dominant file by count
+
     let (file, (_count, min_line, min_col, max_line, max_col)) =
         file_stats.into_iter().max_by_key(|(_, v)| v.0).unwrap();
 
     Some(SourceSpan {
         file,
+
         start_line: min_line,
+
         start_column: min_col,
+
         end_line: max_line,
+
         end_column: max_col,
     })
 }
 
-/// Return the raw function body bytes for a given global function index, if available.
-/// Uses `WasmModuleInfo.body_range` to slice into the original wasm bytes.
-/// Returns None if the function is not found or has no recorded body range (e.g., import).
 pub fn function_body_bytes<'a>(
     module: &WasmModuleInfo,
     wasm_bytes: &'a [u8],
     func_index: u32,
 ) -> Option<&'a [u8]> {
     let f = module.functions.iter().find(|f| f.index == func_index)?;
+
     let range = f.body_range.as_ref()?;
+
     if range.end <= wasm_bytes.len() {
         Some(&wasm_bytes[range.start..range.end])
     } else {
         None
     }
+}
+
+pub fn map_instr_to_source_cached(
+    module: &WasmModuleInfo,
+    wasm_bytes: &[u8],
+    func_index: u32,
+    body_offset: usize,
+) -> Option<SourceLocation> {
+    map_instr_to_source_fast(module, wasm_bytes, func_index, body_offset)
+}
+
+/// Convenience: map a structured WAT line (carrying body-relative offset) to a SourceLocation.
+pub fn map_wat_line_to_source_cached(
+    module: &WasmModuleInfo,
+    wasm_bytes: &[u8],
+    func_index: u32,
+    wl: &WatLine,
+) -> Option<SourceLocation> {
+    map_instr_to_source_cached(module, wasm_bytes, func_index, wl.offset)
 }
 
 /// Produce a simple hex dump (with ASCII gutter) of the provided bytes.
@@ -1173,6 +1348,8 @@ pub fn disassemble_function_wat_lines(
                     let body_range = br2.range();
                     let func_body_start = body_range.start;
 
+                    // name map omitted for performance in inspect; avoid re-parsing the module here
+                    let name_map: Option<std::collections::HashMap<u32, String>> = None;
                     let mut ops = body.get_operators_reader()?;
                     let mut indent: usize = 0;
 
@@ -1198,8 +1375,8 @@ pub fn disassemble_function_wat_lines(
                         }
                         let pad = "  ".repeat(current_indent);
 
-                        // Map source for this operator (optional)
-                        let src = map_instr_to_source(wasm_bytes, target_func_index, rel_off);
+                        // Skip per-op source mapping for performance; source pane will use function span
+                        let src = None;
 
                         // Emit mnemonic text without inline comments
                         let text = match op {
@@ -1236,6 +1413,7 @@ pub fn disassemble_function_wat_lines(
 
                             // calls
                             Operator::Call { function_index } => {
+                                // Keep only the index here to avoid heavy name resolution in inspect hot path
                                 format!("{pad}call {function_index}")
                             }
                             Operator::CallIndirect { .. } => {

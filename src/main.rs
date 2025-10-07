@@ -11,7 +11,9 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState, Wrap};
+use ratatui::widgets::{
+    Block, Borders, Cell, List, ListItem, ListState, Paragraph, Row, Table, TableState, Wrap,
+};
 use ratatui::Terminal;
 use serde::Serialize;
 use wasm_poke::{
@@ -55,13 +57,18 @@ fn main() -> Result<()> {
 
     let module =
         parse_wasm(&cli.wasm_path).with_context(|| "Failed to parse the provided wasm file")?;
-    // Build call graph once for TUI graph mode
+
+    // Build call graph and initialize DWARF context once
     let wasm_bytes = std::fs::read(&cli.wasm_path)
         .with_context(|| format!("Failed to read file {}", cli.wasm_path.display()))?;
+
+    // DWARF/addr2line context is initialized lazily on first mapping; no early call here to avoid private API exposure
+
     let call_graph = build_call_graph(&wasm_bytes).unwrap_or_default();
 
     if cli.json || cli.no_ui {
         run_non_interactive(&cli, &module)?;
+
         return Ok(());
     }
 
@@ -119,67 +126,138 @@ fn run_non_interactive(cli: &Cli, module: &WasmModuleInfo) -> Result<()> {
     Ok(())
 }
 
+#[derive(Debug, Clone)]
+
+struct InspectCache {
+    wat_lines: Vec<WatLine>,
+}
+
 #[derive(Debug)]
+
 struct App {
     wasm_path: String,
+
     module: WasmModuleInfo,
+
     indices: Vec<usize>,
+
     selected: usize,
+
     filter: String,
+
     in_search: bool,
+
     raw_names: bool,
+
     last_update: Instant,
+
     // cached wasm bytes for inspect mode
     wasm_bytes: Vec<u8>,
+
     // graph mode state
     graph_mode: bool,
+
     call_graph: CallGraph,
+
     graph_root: Option<u32>,
+
     expanded: std::collections::HashSet<u32>,
+
     tree_selected: usize,
+
     // inspect mode state
     inspect_mode: bool,
+
     // WAT lines and cursor for inspect
     wat_lines: Vec<WatLine>,
+
     wat_cursor: usize,
+
     // scroll offset for WAT pane (in lines)
     wat_scroll: u16,
+
     // scroll offset for Source pane (in lines)
     source_scroll: u16,
+
+    // cached source spans
+    source_span_cache: std::collections::HashMap<u32, wasm_poke::SourceSpan>,
+
+    // precomputed name map (global index -> best name)
+    name_map: std::collections::HashMap<u32, String>,
+
+    // caches for inspect mode data and source file contents
+    inspect_cache: std::collections::HashMap<u32, Vec<WatLine>>,
+    source_file_cache: std::collections::HashMap<String, String>,
 }
 
 impl App {
     fn new(
         path: String,
         module: WasmModuleInfo,
+
         filter: Option<String>,
+
         raw_names: bool,
+
         wasm_bytes: Vec<u8>,
+
         call_graph: CallGraph,
     ) -> Self {
         let mut app = Self {
             wasm_path: path,
+
             indices: Vec::new(),
+
             selected: 0,
+
             filter: filter.unwrap_or_default(),
+
             in_search: false,
-            module,
+
+            module: module.clone(),
+
             raw_names,
+
             last_update: Instant::now(),
+
             // cache wasm bytes
             wasm_bytes,
+
             graph_mode: false,
+
             call_graph,
+
             graph_root: None,
+
             expanded: std::collections::HashSet::new(),
+
             tree_selected: 0,
+
             inspect_mode: false,
+
             wat_lines: Vec::new(),
+
             wat_cursor: 0,
+
             wat_scroll: 0,
+
             source_scroll: 0,
+
+            source_span_cache: std::collections::HashMap::new(),
+
+            name_map: module
+                .functions
+                .iter()
+                .map(|f| (f.index, f.best_name()))
+                .collect(),
+
+            // initialize caches
+            inspect_cache: std::collections::HashMap::new(),
+            source_file_cache: std::collections::HashMap::new(),
         };
+
         app.refresh_indices();
+
         app
     }
 
@@ -201,6 +279,31 @@ impl App {
         self.indices
             .get(self.selected)
             .and_then(|i| self.module.functions.get(*i))
+    }
+
+    fn ensure_inspect_assets(&mut self, func_index: u32) {
+        // Cache source span once
+        if !self.source_span_cache.contains_key(&func_index) {
+            if let Some(sp) = wasm_poke::function_source_span(&self.wasm_bytes, func_index) {
+                self.source_span_cache.insert(func_index, sp.clone());
+            }
+        }
+
+        // Cache disassembled WAT lines once
+        if !self.inspect_cache.contains_key(&func_index) {
+            let lines =
+                disassemble_function_wat_lines(&self.wasm_bytes, func_index).unwrap_or_default();
+            self.inspect_cache.insert(func_index, lines);
+        }
+
+        // Cache source file contents once if we have a span
+        if let Some(span) = self.source_span_cache.get(&func_index) {
+            if !self.source_file_cache.contains_key(&span.file) {
+                if let Ok(src) = std::fs::read_to_string(&span.file) {
+                    self.source_file_cache.insert(span.file.clone(), src);
+                }
+            }
+        }
     }
 
     fn on_key(&mut self, key: KeyEvent) -> bool {
@@ -245,7 +348,7 @@ impl App {
                     // toggle off graph mode
                     self.graph_mode = false;
                 }
-                KeyCode::Char('k') | KeyCode::Up => {
+                KeyCode::Char('k') | KeyCode::Char('K') | KeyCode::Up => {
                     if self.inspect_mode {
                         self.wat_cursor = self.wat_cursor.saturating_sub(1);
                     } else {
@@ -254,18 +357,23 @@ impl App {
                         }
                     }
                 }
-                KeyCode::Char('j') | KeyCode::Down => {
+                KeyCode::Char('j') | KeyCode::Char('J') | KeyCode::Down => {
                     if self.inspect_mode {
                         self.wat_cursor = self.wat_cursor.saturating_add(1);
                     } else {
-                        // clamp to current visible rows length (computed in draw)
-                        // safe fallback: increment, will be clamped in draw selection
-                        self.tree_selected = self.tree_selected.saturating_add(1);
+                        if let Some(rows) = self.visible_tree_rows() {
+                            let max = rows.len().saturating_sub(1);
+                            self.tree_selected = (self.tree_selected + 1).min(max);
+                        }
                     }
                 }
-                KeyCode::Left | KeyCode::Char('h') => {
+                KeyCode::Left | KeyCode::Char('h') | KeyCode::Char('H') => {
                     // collapse current node if expanded
                     if let Some(rows) = self.visible_tree_rows() {
+                        let max = rows.len().saturating_sub(1);
+                        if self.tree_selected > max {
+                            self.tree_selected = max;
+                        }
                         if let Some(row) = rows.get(self.tree_selected) {
                             if self.expanded.remove(&row.index) {
                                 // collapsed current node
@@ -278,8 +386,12 @@ impl App {
                         }
                     }
                 }
-                KeyCode::Right | KeyCode::Enter | KeyCode::Char('l') => {
+                KeyCode::Right | KeyCode::Enter | KeyCode::Char('l') | KeyCode::Char('L') => {
                     if let Some(rows) = self.visible_tree_rows() {
+                        let max = rows.len().saturating_sub(1);
+                        if self.tree_selected > max {
+                            self.tree_selected = max;
+                        }
                         if let Some(row) = rows.get(self.tree_selected) {
                             // expand if it has children
                             if self
@@ -333,20 +445,26 @@ impl App {
                 KeyCode::Char('r') => {
                     self.raw_names = !self.raw_names;
                 }
+
                 KeyCode::Char('i') | KeyCode::Char('I') => {
                     // Toggle inspect mode in graph view
+
                     if self.inspect_mode {
                         self.inspect_mode = false;
                     } else {
                         self.inspect_mode = true;
+
                         self.wat_scroll = 0;
+
                         self.source_scroll = 0;
                         self.wat_cursor = 0;
                         if let Some(rows) = self.visible_tree_rows() {
                             if let Some(row) = rows.get(self.tree_selected) {
+                                let idx = row.index;
+                                // Ensure inspect assets (WAT lines, source span, source file) are cached
+                                self.ensure_inspect_assets(idx);
                                 self.wat_lines =
-                                    disassemble_function_wat_lines(&self.wasm_bytes, row.index)
-                                        .unwrap_or_default();
+                                    self.inspect_cache.get(&idx).cloned().unwrap_or_default();
                             } else {
                                 self.wat_lines.clear();
                             }
@@ -355,6 +473,7 @@ impl App {
                         }
                     }
                 }
+
                 _ => {}
             }
             return false;
@@ -371,20 +490,33 @@ impl App {
                     self.graph_mode = true;
                 }
             }
+
             KeyCode::Char('i') | KeyCode::Char('I') => {
                 // Toggle inspect mode in list view
+
                 if self.inspect_mode {
                     self.inspect_mode = false;
                 } else if let Some(f) = self.selected_function() {
                     let func_index = f.index;
+
                     self.inspect_mode = true;
+
                     self.wat_scroll = 0;
+
                     self.source_scroll = 0;
+
                     self.wat_cursor = 0;
-                    self.wat_lines = disassemble_function_wat_lines(&self.wasm_bytes, func_index)
+
+                    // Ensure inspect assets (WAT lines, source span, source file) are cached
+                    self.ensure_inspect_assets(func_index);
+                    self.wat_lines = self
+                        .inspect_cache
+                        .get(&func_index)
+                        .cloned()
                         .unwrap_or_default();
                 }
             }
+
             KeyCode::Char('/') => {
                 self.in_search = true;
             }
@@ -452,7 +584,7 @@ impl App {
     fn visible_tree_rows(&self) -> Option<Vec<TreeRow>> {
         let root = self.graph_root?;
         let mut rows: Vec<TreeRow> = Vec::new();
-        use std::collections::HashSet;
+
         let mut path: Vec<u32> = Vec::new();
         let mut stack: Vec<(u32, usize, usize)> = Vec::new(); // (node, depth, child_index)
         stack.push((root, 0, 0));
@@ -506,6 +638,46 @@ impl App {
                 // node collapsed; pop from path
                 let _ = path.pop();
             }
+        }
+
+        // Apply filter in call graph: keep rows that match or are ancestors of a match
+        if !self.filter.is_empty() {
+            let pat = if self.filter.contains('*') {
+                self.filter.clone()
+            } else {
+                format!("*{}*", self.filter)
+            };
+            // Compute match flags per row
+            let mut match_flags: Vec<bool> = Vec::with_capacity(rows.len());
+            for r in &rows {
+                let is_match =
+                    if let Some(f) = self.module.functions.iter().find(|f| f.index == r.index) {
+                        wasm_poke::function_matches(f, &pat)
+                    } else {
+                        false
+                    };
+                match_flags.push(is_match);
+            }
+            // Mark ancestors of matches
+            let mut keep: Vec<bool> = vec![false; rows.len()];
+            let mut stack_idx: Vec<usize> = Vec::new(); // indices of ancestors by depth
+            for (i, r) in rows.iter().enumerate() {
+                while stack_idx.len() > r.depth {
+                    stack_idx.pop();
+                }
+                if match_flags[i] {
+                    keep[i] = true;
+                    for &anc in &stack_idx {
+                        keep[anc] = true;
+                    }
+                }
+                stack_idx.push(i);
+            }
+            rows = rows
+                .into_iter()
+                .zip(keep.into_iter())
+                .filter_map(|(r, k)| if k { Some(r) } else { None })
+                .collect();
         }
 
         Some(rows)
@@ -578,7 +750,7 @@ fn run_ui_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut 
     Ok(())
 }
 
-fn draw_ui(f: &mut ratatui::Frame<'_>, app: &App) {
+fn draw_ui(f: &mut ratatui::Frame<'_>, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -650,6 +822,43 @@ fn draw_header(f: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
     f.render_widget(p, area);
 }
 
+struct WatRenderer;
+
+impl WatRenderer {
+    fn render_window(
+        lines: &[WatLine],
+        cursor: usize,
+        top: usize,
+        vis: usize,
+        name_map: &std::collections::HashMap<u32, String>,
+    ) -> String {
+        let mut buf = String::new();
+        for (i, wl) in lines.iter().enumerate().skip(top).take(vis) {
+            let marker = if i == cursor { ">" } else { " " };
+            let mut rendered = format!("{marker} {}", wl.text);
+            let t = wl.text.trim_start();
+            if let Some(rest) = t.strip_prefix("call ") {
+                if let Some((num, _)) = rest.split_once(' ') {
+                    if let Ok(idx) = num.parse::<u32>() {
+                        if let Some(name) = name_map.get(&idx) {
+                            rendered.push_str("  ;; ");
+                            rendered.push_str(name);
+                        }
+                    }
+                } else if let Ok(idx) = rest.parse::<u32>() {
+                    if let Some(name) = name_map.get(&idx) {
+                        rendered.push_str("  ;; ");
+                        rendered.push_str(name);
+                    }
+                }
+            }
+            rendered.push('\n');
+            buf.push_str(&rendered);
+        }
+        buf
+    }
+}
+
 #[derive(Debug, Clone)]
 struct TreeRow {
     depth: usize,
@@ -658,10 +867,12 @@ struct TreeRow {
     has_indirect: bool,
 }
 
-fn draw_table(f: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
+fn draw_table(f: &mut ratatui::Frame<'_>, area: Rect, app: &mut App) {
     // Inspect mode rendering (side-by-side hex and WAT)
+
     if app.inspect_mode {
         // Determine current function index based on current mode/selection
+
         let current_index = if app.graph_mode {
             if let Some(rows) = app.visible_tree_rows() {
                 rows.get(app.tree_selected).map(|r| r.index)
@@ -676,35 +887,34 @@ fn draw_table(f: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
             ix
         } else {
             // Nothing selected
+
             let p = Paragraph::new("No function selected for inspect")
                 .block(Block::default().borders(Borders::ALL).title(" Inspect "));
+
             f.render_widget(p, area);
+
             return;
         };
 
         // Slice function body bytes from cached wasm
+
         let body_bytes =
             wasm_poke::function_body_bytes(&app.module, &app.wasm_bytes, current_index)
                 .unwrap_or(&[]);
 
-        // Prepare hex
-        let hex_text = wasm_poke::hexdump(body_bytes, 16);
-        // Structured WAT lines (indent + offsets + optional source)
+        // Use cached WAT lines (populated on entering inspect)
         let wat_lines: Vec<WatLine> = if app.wat_lines.is_empty() {
             disassemble_function_wat_lines(&app.wasm_bytes, current_index).unwrap_or_default()
         } else {
             app.wat_lines.clone()
         };
+
         let total_wat_lines = wat_lines.len();
+
         let cursor = app.wat_cursor.min(total_wat_lines.saturating_sub(1));
-        let mut wat_buf = String::new();
-        for (i, wl) in wat_lines.iter().enumerate() {
-            let marker = if i == cursor { ">" } else { " " };
-            wat_buf.push_str(&format!("{marker} {}\n", wl.text));
-        }
-        let wat_text = wat_buf;
 
         // Split horizontally into three panes: Hex | WAT | Source
+
         let cols = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
@@ -714,193 +924,207 @@ fn draw_table(f: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
             ])
             .split(area);
 
+        // HEX pane: window around selected byte and color that byte
+        let visible_hex_lines: usize = cols[0].height.saturating_sub(2) as usize;
+        let bytes_per_line: usize = 16;
+        let selected_offset = wat_lines.get(cursor).map(|w| w.offset).unwrap_or(0usize);
+        let selected_row = selected_offset / bytes_per_line;
+        let selected_col = selected_offset % bytes_per_line;
+        let total_hex_lines = (body_bytes.len() + bytes_per_line - 1) / bytes_per_line;
+        let desired_hex_top = selected_row.saturating_sub(visible_hex_lines / 2);
+        let max_hex_top = total_hex_lines.saturating_sub(visible_hex_lines);
+        let hex_top = desired_hex_top.min(max_hex_top);
+
+        let mut hex_lines: Vec<Line> = Vec::with_capacity(visible_hex_lines);
+        for r in hex_top..(hex_top + visible_hex_lines).min(total_hex_lines) {
+            let base = r * bytes_per_line;
+            let end = (base + bytes_per_line).min(body_bytes.len());
+            let mut spans: Vec<Span> = Vec::with_capacity(1 + bytes_per_line + 2 + (end - base));
+            spans.push(Span::raw(format!("{:08x}: ", base)));
+
+            for c in 0..bytes_per_line {
+                if base + c < end {
+                    let b = body_bytes[base + c];
+                    let s = format!("{:02x} ", b);
+                    if r == selected_row && c == selected_col {
+                        spans.push(Span::styled(
+                            s,
+                            Style::default().fg(Color::Black).bg(Color::Yellow),
+                        ));
+                    } else {
+                        spans.push(Span::raw(s));
+                    }
+                } else {
+                    spans.push(Span::raw("   "));
+                }
+            }
+
+            // ASCII gutter
+            spans.push(Span::raw(" |"));
+            for i in base..end {
+                let ch = body_bytes[i];
+                let ch = if ch.is_ascii_graphic() || ch == b' ' {
+                    ch as char
+                } else {
+                    '.'
+                };
+                spans.push(Span::raw(ch.to_string()));
+            }
+            spans.push(Span::raw("|"));
+            hex_lines.push(Line::from(spans));
+        }
         let hex_widget =
-            Paragraph::new(hex_text).block(Block::default().borders(Borders::ALL).title(" Hex "));
-        // Attempt to resolve a source location for this function (first instruction as heuristic)
-        let loc_opt = wasm_poke::map_instr_to_source(&app.wasm_bytes, current_index, 0);
-        // Prepend a source header to the WAT view if available
-        let wat_text = if let Some(ref loc) = loc_opt {
-            format!(
-                ";; source: {}:{}:{}\n{}",
-                loc.file, loc.line, loc.column, wat_text
-            )
+            Paragraph::new(hex_lines).block(Block::default().borders(Borders::ALL).title(" Hex "));
+
+        // WAT pane: center cursor using our windowed renderer
+        let visible_wat_lines: usize = cols[1].height.saturating_sub(2) as usize;
+        let desired_wat_top = cursor.saturating_sub(visible_wat_lines / 2);
+        let max_wat_top = total_wat_lines.saturating_sub(visible_wat_lines);
+        let wat_top = desired_wat_top.min(max_wat_top);
+        let wat_text = WatRenderer::render_window(
+            &wat_lines,
+            cursor,
+            wat_top,
+            visible_wat_lines,
+            &app.name_map,
+        );
+
+        let wat_title = if let Some(ref sp) = app.source_span_cache.get(&current_index) {
+            format!(" WAT — {}:{} ", sp.file, sp.start_line)
         } else {
-            wat_text
+            " WAT ".to_string()
         };
-        // Center WAT cursor in pane (derive scroll purely from cursor)
-        let visible_wat_lines: u16 = cols[1].height.saturating_sub(2);
-        let vis = visible_wat_lines as usize;
-        let desired_top = cursor.saturating_sub(vis / 2);
-        let max_top = total_wat_lines.saturating_sub(vis);
-        let wat_scroll_local = desired_top.min(max_top);
-        let wat_scroll_u16 = wat_scroll_local as u16;
+        let wat_widget =
+            Paragraph::new(wat_text).block(Block::default().borders(Borders::ALL).title(wat_title));
 
-        let wat_widget = Paragraph::new(wat_text)
-            .block(Block::default().borders(Borders::ALL).title(" WAT "))
-            .scroll((wat_scroll_u16, 0));
-        let span_opt = wasm_poke::function_source_span(&app.wasm_bytes, current_index);
-        // Determine target source line from WAT cursor (fallback to function start)
-        let target_line_opt: Option<u32> = wat_lines
-            .get(cursor)
-            .and_then(|w| w.src.as_ref().map(|s| s.line))
-            .or_else(|| span_opt.as_ref().map(|sp| sp.start_line));
+        // Source pane: use cached file content and center around mapped line for current instruction
+        let mut source_buf = String::new();
+        let mut _source_scroll = 0u16; // kept for API symmetry
+        let mut target_line_from_instr: Option<u32> = None;
 
-        let (source_text, source_scroll_u16) = if let Some(span) = span_opt {
-            match std::fs::read_to_string(&span.file) {
-                Ok(src) => {
+        if let Some(wl) = wat_lines.get(cursor) {
+            if let Some(loc) = wasm_poke::map_wat_line_to_source_cached(
+                &app.module,
+                &app.wasm_bytes,
+                current_index,
+                wl,
+            ) {
+                target_line_from_instr = Some(loc.line);
+                // try to use cached file content
+                if let Some(src) = app.source_file_cache.get(&loc.file) {
+                    let lines: Vec<&str> = src.lines().collect();
+
+                    let visible = cols[2].height.saturating_sub(2) as usize;
+                    let target = (loc.line as usize).max(1);
+                    let half = visible / 2;
+                    let start = target.saturating_sub(1).saturating_sub(half);
+                    let end = (start + visible).min(lines.len());
+                    for i in start..end {
+                        let ln = i + 1;
+                        let marker = if (ln as u32) == loc.line { ">" } else { " " };
+
+                        source_buf.push_str(&format!("{marker} {:5} | {}\n", ln, lines[i]));
+                    }
+                } else if let Ok(src) = std::fs::read_to_string(&loc.file) {
+                    let lines: Vec<&str> = src.lines().collect();
+
+                    let visible = cols[2].height.saturating_sub(2) as usize;
+                    let target = (loc.line as usize).max(1);
+                    let half = visible / 2;
+                    let start = target.saturating_sub(1).saturating_sub(half);
+                    let end = (start + visible).min(lines.len());
+
+                    for i in start..end {
+                        let ln = i + 1;
+
+                        let marker = if (ln as u32) == loc.line { ">" } else { " " };
+
+                        source_buf.push_str(&format!("{marker} {:5} | {}\n", ln, lines[i]));
+                    }
+                }
+            }
+        }
+
+        if source_buf.is_empty() {
+            // fallback to function span windowing if available
+            if let Some(span) = app.source_span_cache.get(&current_index) {
+                if let Some(src) = app.source_file_cache.get(&span.file) {
                     let lines: Vec<&str> = src.lines().collect();
                     let start = (span.start_line as usize).saturating_sub(1);
                     let end = (span.end_line as usize).min(lines.len());
-                    let mut buf = String::new();
-
-                    // Build buffer and compute desired scroll to keep target line visible
-                    let target_line = target_line_opt.unwrap_or(span.start_line);
-                    let target_idx_abs = (target_line as usize).saturating_sub(1);
-                    let rel_idx = target_idx_abs.saturating_sub(start);
-
-                    for i in start..end {
+                    let visible = cols[2].height.saturating_sub(2) as usize;
+                    let center_line = target_line_from_instr.unwrap_or(span.start_line) as usize;
+                    let center_idx = center_line.saturating_sub(1);
+                    let rel_idx = center_idx.saturating_sub(start);
+                    let half = visible / 2;
+                    let window_start = {
+                        let desired_center = start.saturating_add(rel_idx.saturating_sub(half));
+                        let max_start = end.saturating_sub(visible);
+                        desired_center.min(max_start).max(start)
+                    };
+                    let window_end = (window_start + visible).min(end);
+                    for i in window_start..window_end {
                         let ln = i + 1;
-                        let marker = if (ln as u32) == target_line { ">" } else { " " };
-                        let content = lines[i];
-                        buf.push_str(&format!("{marker} {:5} | {content}\n", ln));
+                        let marker =
+                            if (ln as u32) == target_line_from_instr.unwrap_or(span.start_line) {
+                                ">"
+                            } else {
+                                " "
+                            };
+                        source_buf.push_str(&format!("{marker} {:5} | {}\n", ln, lines[i]));
                     }
-
-                    let total_source_lines: u16 = buf.lines().count() as u16;
-                    let visible_source_lines: u16 = cols[2].height.saturating_sub(2); // minus borders
-                    let max_source_scroll: u16 = if total_source_lines > visible_source_lines {
-                        total_source_lines - visible_source_lines
-                    } else {
-                        0
-                    };
-                    // Center target line when possible
-                    let half = (visible_source_lines / 2) as usize;
-                    let mut desired = if rel_idx > half {
-                        (rel_idx - half) as u16
-                    } else {
-                        0
-                    };
-                    if desired > max_source_scroll {
-                        desired = max_source_scroll;
-                    }
-
-                    (buf, desired)
-                }
-                Err(_) => {
-                    let fallback = format!(
-                        "{}:{}:{}-{}:{}",
-                        span.file,
-                        span.start_line,
-                        span.start_column,
-                        span.end_line,
-                        span.end_column
-                    );
-                    (fallback, 0)
-                }
-            }
-        } else if let Some(src_loc) = wat_lines.get(cursor).and_then(|w| w.src.as_ref()) {
-            match std::fs::read_to_string(&src_loc.file) {
-                Ok(src) => {
+                } else if let Ok(src) = std::fs::read_to_string(&span.file) {
                     let lines: Vec<&str> = src.lines().collect();
-                    let target_line = src_loc.line;
-                    let center = (target_line as usize).max(1);
-                    let start = center.saturating_sub(3);
-                    let end = (center + 3).min(lines.len());
-                    let mut buf = String::new();
-                    for i in start..end {
+                    let start = (span.start_line as usize).saturating_sub(1);
+                    let end = (span.end_line as usize).min(lines.len());
+                    let visible = cols[2].height.saturating_sub(2) as usize;
+                    let center_line = target_line_from_instr.unwrap_or(span.start_line) as usize;
+                    let center_idx = center_line.saturating_sub(1);
+                    let rel_idx = center_idx.saturating_sub(start);
+                    let half = visible / 2;
+                    let window_start = {
+                        let desired_center = start.saturating_add(rel_idx.saturating_sub(half));
+                        let max_start = end.saturating_sub(visible);
+                        desired_center.min(max_start).max(start)
+                    };
+                    let window_end = (window_start + visible).min(end);
+                    for i in window_start..window_end {
                         let ln = i + 1;
-                        let marker = if ln as u32 == target_line { ">" } else { " " };
-                        let content = lines[i];
-                        buf.push_str(&format!("{marker} {:5} | {content}\n", ln));
+                        let marker =
+                            if (ln as u32) == target_line_from_instr.unwrap_or(span.start_line) {
+                                ">"
+                            } else {
+                                " "
+                            };
+                        source_buf.push_str(&format!("{marker} {:5} | {}\n", ln, lines[i]));
                     }
-
-                    // Center highlighted line within the source pane when possible
-                    let total_source_lines: u16 = buf.lines().count() as u16;
-                    let visible_source_lines: u16 = cols[2].height.saturating_sub(2);
-                    let max_source_scroll: u16 = if total_source_lines > visible_source_lines {
-                        total_source_lines - visible_source_lines
-                    } else {
-                        0
-                    };
-                    let half = (visible_source_lines / 2) as usize;
-                    let rel_idx = (center.saturating_sub(start + 1))
-                        .min((total_source_lines as usize).saturating_sub(1));
-                    let mut desired = if rel_idx > half {
-                        (rel_idx - half) as u16
-                    } else {
-                        0
-                    };
-                    if desired > max_source_scroll {
-                        desired = max_source_scroll;
-                    }
-
-                    (buf, desired)
                 }
-                Err(_) => (format!("{}:{}", src_loc.file, src_loc.line), 0),
+            } else {
+                source_buf.push_str(
+                    "No source mapping available.\nBuild with debug information (DWARF) to enable source pane.\n",
+                );
             }
-        } else {
-            (
-                "No source mapping available.\nBuild with debug information (DWARF) to enable source pane.".to_string(),
-                0,
-            )
-        };
+        }
 
-        let source_widget = Paragraph::new(source_text)
-            .block(Block::default().borders(Borders::ALL).title(" Source "))
-            .scroll((source_scroll_u16, 0));
+        let source_widget = Paragraph::new(source_buf)
+            .block(Block::default().borders(Borders::ALL).title(" Source "));
 
+        // Render panes
         f.render_widget(hex_widget, cols[0]);
+
         f.render_widget(wat_widget, cols[1]);
         f.render_widget(source_widget, cols[2]);
+
         return;
     }
 
     // Graph mode rendering
     if app.graph_mode {
         // Build visible rows
-        let mut rows = app.visible_tree_rows().unwrap_or_default();
-        // Apply filter in call graph: keep rows that match or are ancestors of a match
-        if !app.filter.is_empty() {
-            let pat = if app.filter.contains('*') {
-                app.filter.clone()
-            } else {
-                format!("*{}*", app.filter)
-            };
-            // Compute match flags per row
-            let mut match_flags: Vec<bool> = Vec::with_capacity(rows.len());
-            for r in &rows {
-                let is_match =
-                    if let Some(f) = app.module.functions.iter().find(|f| f.index == r.index) {
-                        wasm_poke::function_matches(f, &pat)
-                    } else {
-                        false
-                    };
-                match_flags.push(is_match);
-            }
-            // Mark ancestors of matches
-            let mut keep: Vec<bool> = vec![false; rows.len()];
-            let mut stack: Vec<usize> = Vec::new(); // indices of ancestors by depth
-            for (i, r) in rows.iter().enumerate() {
-                while stack.len() > r.depth {
-                    stack.pop();
-                }
-                if match_flags[i] {
-                    keep[i] = true;
-                    for &anc in &stack {
-                        keep[anc] = true;
-                    }
-                }
-                stack.push(i);
-            }
-            // Filter rows
-            rows = rows
-                .into_iter()
-                .zip(keep.into_iter())
-                .filter_map(|(r, k)| if k { Some(r) } else { None })
-                .collect();
-        }
+        let rows = app.visible_tree_rows().unwrap_or_default();
 
         // Header with cumulative size for root
-        let mut header_cells = vec![
+        let header_cells = vec![
             Cell::from("Name").style(
                 Style::default()
                     .fg(Color::Magenta)
@@ -1119,9 +1343,13 @@ fn draw_table(f: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
             width: 40.min(area.width),
             height: 9.min(area.height),
         };
+
         let para = Paragraph::new(details)
             .block(detail_block)
             .wrap(Wrap { trim: true });
+
+        // Clear background under overlay for readability
+        f.render_widget(ratatui::widgets::Clear, overlay);
         f.render_widget(para, overlay);
     }
 }
