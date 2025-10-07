@@ -370,47 +370,65 @@ pub fn unique_cumulative_size(
 }
 
 /// Minimal wildcard matcher supporting only `*` (matches any sequence, including empty).
+
 /// Case-sensitive, literal match for all other characters.
+
 pub fn wildcard_match(s: &str, pat: &str) -> bool {
     // Fast-path trivial cases
+
     if pat == "*" {
         return true;
     }
+
     if !pat.contains('*') {
         return s == pat;
     }
 
     // Collapse consecutive '*' for simpler processing
+
     let mut collapsed = String::with_capacity(pat.len());
+
     let mut prev_star = false;
+
     for ch in pat.chars() {
         if ch == '*' {
             if !prev_star {
                 collapsed.push('*');
+
                 prev_star = true;
             }
         } else {
             collapsed.push(ch);
+
             prev_star = false;
         }
     }
 
     // Split into tokens between '*'
+
     let tokens: Vec<&str> = collapsed.split('*').collect();
+
     let starts_with_star = collapsed.starts_with('*');
+
     let ends_with_star = collapsed.ends_with('*');
 
     // Special case: pattern is like "*" after collapsing, but already handled above.
+
     if tokens.is_empty() {
         return true;
     }
 
     // We'll search for tokens in order through `s`.
+
     // If pattern doesn't start with '*', the first token must be a prefix.
-    // If pattern doesn't end with '*', the last token must be a suffix.
+
+    // If pattern doesn't end with '*', the last token must be a suffix (with a special case
+    // to allow Rust disambiguators like `::h<hex>` after the last token).
+
     let mut remaining = s;
 
     let first_idx = 0usize;
+
     let last_idx = tokens.len().saturating_sub(1);
 
     for (i, tok) in tokens.iter().enumerate() {
@@ -420,17 +438,54 @@ pub fn wildcard_match(s: &str, pat: &str) -> bool {
 
         if i == first_idx && !starts_with_star {
             // Must be prefix match
+
             if let Some(rest) = remaining.strip_prefix(tok) {
                 remaining = rest;
             } else {
                 return false;
             }
         } else if i == last_idx && !ends_with_star {
-            // Must be suffix match
-            if let Some(_) = remaining.rfind(tok) {
-                // Ensure token is at the very end
-                if remaining.ends_with(tok) {
-                    // nothing else to check
+            // Must be suffix match, but allow trailing Rust-style ::segments after the last token
+            // Example: simple*axpb_n should match simple_wasm::generic:axpb_n::h1534
+            if let Some(pos) = remaining.rfind(tok) {
+                let after = &remaining[pos + tok.len()..];
+
+                // Accept if nothing remains, or if the remainder is a sequence of ::segment parts.
+                // A segment is non-empty and contains only typical symbol chars.
+                fn valid_trailing_segments(mut s: &str) -> bool {
+                    if s.is_empty() {
+                        return true;
+                    }
+                    while !s.is_empty() {
+                        if !s.starts_with("::") {
+                            return false;
+                        }
+                        s = &s[2..];
+                        // segment must be non-empty and only contain allowed chars
+                        let mut end = 0usize;
+                        for ch in s.chars() {
+                            if ch.is_ascii_alphanumeric()
+                                || ch == '_'
+                                || ch == '$'
+                                || ch == '{'
+                                || ch == '}'
+                            {
+                                end += ch.len_utf8();
+                            } else {
+                                break;
+                            }
+                        }
+                        if end == 0 {
+                            return false;
+                        }
+
+                        s = &s[end..];
+                    }
+                    true
+                }
+
+                if valid_trailing_segments(after) {
+                    remaining = "";
                 } else {
                     return false;
                 }
@@ -439,9 +494,12 @@ pub fn wildcard_match(s: &str, pat: &str) -> bool {
             }
         } else {
             // Find the token anywhere in the remaining string and advance
+
             if let Some(pos) = remaining.find(tok) {
                 // Consume up to end of the token
+
                 let next_start = pos + tok.len();
+
                 remaining = &remaining[next_start..];
             } else {
                 return false;
@@ -449,14 +507,40 @@ pub fn wildcard_match(s: &str, pat: &str) -> bool {
         }
     }
 
-    // If ends_with_star is false, we already confirmed last token is a suffix.
+    // If ends_with_star is false, we already confirmed last token is a suffix (with optional ::h<hex>).
+
     // If ends_with_star is true, trailing chars are allowed.
+
     // If tokens ended with empty due to trailing '*', handled by ends_with_star.
+
     true
 }
 
+#[cfg(test)]
+mod wildcard_tests {
+    use super::wildcard_match;
+
+    #[test]
+    fn wildcard_trailing_segments() {
+        let s = "simple_wasm::generic:axpb_n::h1534";
+        assert!(wildcard_match(s, "simple*axpb_n"));
+        assert!(wildcard_match(s, "simple*axpb_n*"));
+        assert!(!wildcard_match(s, "simple*axpb_m"));
+    }
+
+    #[test]
+    fn wildcard_existing_behavior() {
+        assert!(wildcard_match("my_add", "*add*"));
+        assert!(wildcard_match("adder", "add*"));
+        assert!(!wildcard_match("adder", "add")); // strict match without '*'
+        assert!(!wildcard_match("Add", "*add*")); // case-sensitive
+    }
+}
+
 // Inspect utilities
+
 //
+
 // Source mapping (DWARF) API
 //
 // Note: This is a placeholder API for mapping instruction offsets to source locations.

@@ -11,9 +11,7 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{
-    Block, Borders, Cell, List, ListItem, ListState, Paragraph, Row, Table, TableState, Wrap,
-};
+use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState, Wrap};
 use ratatui::Terminal;
 use serde::Serialize;
 use wasm_poke::{
@@ -58,17 +56,14 @@ fn main() -> Result<()> {
     let module =
         parse_wasm(&cli.wasm_path).with_context(|| "Failed to parse the provided wasm file")?;
 
-    // Build call graph and initialize DWARF context once
+    // Build call graph once for TUI graph mode
     let wasm_bytes = std::fs::read(&cli.wasm_path)
         .with_context(|| format!("Failed to read file {}", cli.wasm_path.display()))?;
-
     // DWARF/addr2line context is initialized lazily on first mapping; no early call here to avoid private API exposure
-
     let call_graph = build_call_graph(&wasm_bytes).unwrap_or_default();
 
     if cli.json || cli.no_ui {
         run_non_interactive(&cli, &module)?;
-
         return Ok(());
     }
 
@@ -126,65 +121,37 @@ fn run_non_interactive(cli: &Cli, module: &WasmModuleInfo) -> Result<()> {
     Ok(())
 }
 
-#[derive(Debug, Clone)]
-
-struct InspectCache {
-    wat_lines: Vec<WatLine>,
-}
-
 #[derive(Debug)]
-
 struct App {
     wasm_path: String,
-
     module: WasmModuleInfo,
-
     indices: Vec<usize>,
-
     selected: usize,
-
     filter: String,
-
     in_search: bool,
-
     raw_names: bool,
-
     last_update: Instant,
-
     // cached wasm bytes for inspect mode
     wasm_bytes: Vec<u8>,
-
     // graph mode state
     graph_mode: bool,
-
     call_graph: CallGraph,
-
     graph_root: Option<u32>,
-
     expanded: std::collections::HashSet<u32>,
-
     tree_selected: usize,
-
     // inspect mode state
     inspect_mode: bool,
-
     // WAT lines and cursor for inspect
     wat_lines: Vec<WatLine>,
-
     wat_cursor: usize,
-
     // scroll offset for WAT pane (in lines)
     wat_scroll: u16,
-
     // scroll offset for Source pane (in lines)
     source_scroll: u16,
-
     // cached source spans
     source_span_cache: std::collections::HashMap<u32, wasm_poke::SourceSpan>,
-
     // precomputed name map (global index -> best name)
     name_map: std::collections::HashMap<u32, String>,
-
     // caches for inspect mode data and source file contents
     inspect_cache: std::collections::HashMap<u32, Vec<WatLine>>,
     source_file_cache: std::collections::HashMap<String, String>,
@@ -194,70 +161,43 @@ impl App {
     fn new(
         path: String,
         module: WasmModuleInfo,
-
         filter: Option<String>,
-
         raw_names: bool,
-
         wasm_bytes: Vec<u8>,
-
         call_graph: CallGraph,
     ) -> Self {
         let mut app = Self {
             wasm_path: path,
-
             indices: Vec::new(),
-
             selected: 0,
-
             filter: filter.unwrap_or_default(),
-
             in_search: false,
-
             module: module.clone(),
-
             raw_names,
-
             last_update: Instant::now(),
-
             // cache wasm bytes
             wasm_bytes,
-
             graph_mode: false,
-
             call_graph,
-
             graph_root: None,
-
             expanded: std::collections::HashSet::new(),
-
             tree_selected: 0,
-
             inspect_mode: false,
-
             wat_lines: Vec::new(),
-
             wat_cursor: 0,
-
             wat_scroll: 0,
-
             source_scroll: 0,
-
             source_span_cache: std::collections::HashMap::new(),
-
             name_map: module
                 .functions
                 .iter()
                 .map(|f| (f.index, f.best_name()))
                 .collect(),
-
             // initialize caches
             inspect_cache: std::collections::HashMap::new(),
             source_file_cache: std::collections::HashMap::new(),
         };
-
         app.refresh_indices();
-
         app
     }
 
@@ -351,20 +291,16 @@ impl App {
                 KeyCode::Char('k') | KeyCode::Char('K') | KeyCode::Up => {
                     if self.inspect_mode {
                         self.wat_cursor = self.wat_cursor.saturating_sub(1);
-                    } else {
-                        if self.tree_selected > 0 {
-                            self.tree_selected -= 1;
-                        }
+                    } else if self.tree_selected > 0 {
+                        self.tree_selected -= 1;
                     }
                 }
                 KeyCode::Char('j') | KeyCode::Char('J') | KeyCode::Down => {
                     if self.inspect_mode {
                         self.wat_cursor = self.wat_cursor.saturating_add(1);
-                    } else {
-                        if let Some(rows) = self.visible_tree_rows() {
-                            let max = rows.len().saturating_sub(1);
-                            self.tree_selected = (self.tree_selected + 1).min(max);
-                        }
+                    } else if let Some(rows) = self.visible_tree_rows() {
+                        let max = rows.len().saturating_sub(1);
+                        self.tree_selected = (self.tree_selected + 1).min(max);
                     }
                 }
                 KeyCode::Left | KeyCode::Char('h') | KeyCode::Char('H') => {
@@ -377,11 +313,9 @@ impl App {
                         if let Some(row) = rows.get(self.tree_selected) {
                             if self.expanded.remove(&row.index) {
                                 // collapsed current node
-                            } else {
+                            } else if self.tree_selected > 0 {
                                 // if not expanded, try to move selection to parent (upwards)
-                                if self.tree_selected > 0 {
-                                    self.tree_selected -= 1;
-                                }
+                                self.tree_selected -= 1;
                             }
                         }
                     }
@@ -431,12 +365,10 @@ impl App {
                 KeyCode::PageDown | KeyCode::Char('d') => {
                     if self.inspect_mode {
                         self.wat_cursor = self.wat_cursor.saturating_add(10);
-                    } else {
+                    } else if let Some(rows) = self.visible_tree_rows() {
                         let step = 10usize;
-                        if let Some(rows) = self.visible_tree_rows() {
-                            self.tree_selected =
-                                (self.tree_selected + step).min(rows.len().saturating_sub(1));
-                        }
+                        self.tree_selected =
+                            (self.tree_selected + step).min(rows.len().saturating_sub(1));
                     }
                 }
                 KeyCode::Char('/') => {
@@ -445,17 +377,13 @@ impl App {
                 KeyCode::Char('r') => {
                     self.raw_names = !self.raw_names;
                 }
-
                 KeyCode::Char('i') | KeyCode::Char('I') => {
                     // Toggle inspect mode in graph view
-
                     if self.inspect_mode {
                         self.inspect_mode = false;
                     } else {
                         self.inspect_mode = true;
-
                         self.wat_scroll = 0;
-
                         self.source_scroll = 0;
                         self.wat_cursor = 0;
                         if let Some(rows) = self.visible_tree_rows() {
@@ -473,7 +401,6 @@ impl App {
                         }
                     }
                 }
-
                 _ => {}
             }
             return false;
@@ -490,23 +417,16 @@ impl App {
                     self.graph_mode = true;
                 }
             }
-
             KeyCode::Char('i') | KeyCode::Char('I') => {
                 // Toggle inspect mode in list view
-
                 if self.inspect_mode {
                     self.inspect_mode = false;
                 } else if let Some(f) = self.selected_function() {
                     let func_index = f.index;
-
                     self.inspect_mode = true;
-
                     self.wat_scroll = 0;
-
                     self.source_scroll = 0;
-
                     self.wat_cursor = 0;
-
                     // Ensure inspect assets (WAT lines, source span, source file) are cached
                     self.ensure_inspect_assets(func_index);
                     self.wat_lines = self
@@ -516,7 +436,6 @@ impl App {
                         .unwrap_or_default();
                 }
             }
-
             KeyCode::Char('/') => {
                 self.in_search = true;
             }
@@ -530,19 +449,15 @@ impl App {
             KeyCode::Char('k') | KeyCode::Up => {
                 if self.inspect_mode {
                     self.wat_cursor = self.wat_cursor.saturating_sub(1);
-                } else {
-                    if self.selected > 0 {
-                        self.selected -= 1;
-                    }
+                } else if self.selected > 0 {
+                    self.selected -= 1;
                 }
             }
             KeyCode::Char('j') | KeyCode::Down => {
                 if self.inspect_mode {
                     self.wat_cursor = self.wat_cursor.saturating_add(1);
-                } else {
-                    if self.selected + 1 < self.indices.len() {
-                        self.selected += 1;
-                    }
+                } else if self.selected + 1 < self.indices.len() {
+                    self.selected += 1;
                 }
             }
             KeyCode::PageUp => {
@@ -610,7 +525,8 @@ impl App {
             // expand children only if expanded contains node
             if self.expanded.contains(&node) {
                 if let Some(children) = self.call_graph.edges.get(&node) {
-                    while child_i < children.len() {
+                    // NOTE: this loop only executes at most once per pop/push to walk the tree
+                    if child_i < children.len() {
                         let child = children[child_i];
                         child_i += 1;
                         // put current back with next child index
@@ -618,13 +534,12 @@ impl App {
                         if path.contains(&child) {
                             // cycle marker
                             push_row(child, depth + 1, true);
-                            break;
                         } else {
                             // descend
                             path.push(child);
                             stack.push((child, depth + 1, 0));
-                            break;
                         }
+                        // continue in next iteration
                     }
                     // when exhausted, pop from path
                     if child_i >= children.len() {
@@ -869,10 +784,8 @@ struct TreeRow {
 
 fn draw_table(f: &mut ratatui::Frame<'_>, area: Rect, app: &mut App) {
     // Inspect mode rendering (side-by-side hex and WAT)
-
     if app.inspect_mode {
         // Determine current function index based on current mode/selection
-
         let current_index = if app.graph_mode {
             if let Some(rows) = app.visible_tree_rows() {
                 rows.get(app.tree_selected).map(|r| r.index)
@@ -887,17 +800,13 @@ fn draw_table(f: &mut ratatui::Frame<'_>, area: Rect, app: &mut App) {
             ix
         } else {
             // Nothing selected
-
             let p = Paragraph::new("No function selected for inspect")
                 .block(Block::default().borders(Borders::ALL).title(" Inspect "));
-
             f.render_widget(p, area);
-
             return;
         };
 
         // Slice function body bytes from cached wasm
-
         let body_bytes =
             wasm_poke::function_body_bytes(&app.module, &app.wasm_bytes, current_index)
                 .unwrap_or(&[]);
@@ -908,13 +817,10 @@ fn draw_table(f: &mut ratatui::Frame<'_>, area: Rect, app: &mut App) {
         } else {
             app.wat_lines.clone()
         };
-
         let total_wat_lines = wat_lines.len();
-
         let cursor = app.wat_cursor.min(total_wat_lines.saturating_sub(1));
 
         // Split horizontally into three panes: Hex | WAT | Source
-
         let cols = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
@@ -999,7 +905,6 @@ fn draw_table(f: &mut ratatui::Frame<'_>, area: Rect, app: &mut App) {
 
         // Source pane: use cached file content and center around mapped line for current instruction
         let mut source_buf = String::new();
-        let mut _source_scroll = 0u16; // kept for API symmetry
         let mut target_line_from_instr: Option<u32> = None;
 
         if let Some(wl) = wat_lines.get(cursor) {
@@ -1022,7 +927,6 @@ fn draw_table(f: &mut ratatui::Frame<'_>, area: Rect, app: &mut App) {
                     for i in start..end {
                         let ln = i + 1;
                         let marker = if (ln as u32) == loc.line { ">" } else { " " };
-
                         source_buf.push_str(&format!("{marker} {:5} | {}\n", ln, lines[i]));
                     }
                 } else if let Ok(src) = std::fs::read_to_string(&loc.file) {
@@ -1036,9 +940,7 @@ fn draw_table(f: &mut ratatui::Frame<'_>, area: Rect, app: &mut App) {
 
                     for i in start..end {
                         let ln = i + 1;
-
                         let marker = if (ln as u32) == loc.line { ">" } else { " " };
-
                         source_buf.push_str(&format!("{marker} {:5} | {}\n", ln, lines[i]));
                     }
                 }
@@ -1111,10 +1013,8 @@ fn draw_table(f: &mut ratatui::Frame<'_>, area: Rect, app: &mut App) {
 
         // Render panes
         f.render_widget(hex_widget, cols[0]);
-
         f.render_widget(wat_widget, cols[1]);
         f.render_widget(source_widget, cols[2]);
-
         return;
     }
 
