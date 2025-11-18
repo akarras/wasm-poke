@@ -3,6 +3,9 @@ name = "wasm-poke"
 version = "0.1.0"
 edition = "2021"
 
+[profile.release]
+opt-level = 3
+codegen-units = 1
 
 [workspace]
 members = ["fixtures/simple-wasm"]
@@ -23,3 +26,4 @@ serde_json = "1.0"
 addr2line = "0.21"
 object = { version = "0.36", features = ["read", "wasm"] }
 gimli = { version = "0.28", features = ["read"] }
+globset = "0.4"

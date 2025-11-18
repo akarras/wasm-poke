@@ -13,7 +13,10 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState, Wrap};
 use ratatui::Terminal;
+
 use serde::Serialize;
+
+use globset::GlobBuilder;
 use wasm_poke::{
     build_call_graph, disassemble_function_wat_lines, function_matches, parse_wasm,
     unique_cumulative_size, CallGraph, FunctionInfo, WasmModuleInfo, WatLine,
@@ -85,8 +88,65 @@ fn run_non_interactive(cli: &Cli, module: &WasmModuleInfo) -> Result<()> {
         return Ok(());
     }
 
-    // Summary mode
-    let mut matches = collect_sorted_indices(module, cli.filter.as_deref());
+    // Summary mode — compile glob once per filter for speed
+
+    let mut matches: Vec<usize> = if let Some(p) = cli.filter.as_deref() {
+        let pat = if p.contains('*') {
+            p.to_string()
+        } else {
+            format!("*{}*", p)
+        };
+        if let Ok(glob) = GlobBuilder::new(&pat)
+            .case_insensitive(true)
+            .backslash_escape(false)
+            .build()
+        {
+            let matcher = glob.compile_matcher();
+            let mut v = Vec::with_capacity(module.defined_functions as usize);
+            for (i, f) in module.functions.iter().enumerate() {
+                let mut matched = false;
+                if let Some(ref d) = f.demangled_name {
+                    if matcher.is_match(d) {
+                        matched = true;
+                    }
+                }
+                if !matched {
+                    if let Some(ref r) = f.raw_name {
+                        if matcher.is_match(r) {
+                            matched = true;
+                        }
+                    }
+                }
+                if !matched {
+                    for e in &f.export_names {
+                        if matcher.is_match(e) {
+                            matched = true;
+                            break;
+                        }
+                    }
+                }
+                if !matched
+                    && f.demangled_name.is_none()
+                    && f.raw_name.is_none()
+                    && f.export_names.is_empty()
+                {
+                    let tmp = format!("func[{}]", f.index);
+                    if matcher.is_match(&tmp) {
+                        matched = true;
+                    }
+                }
+                if matched {
+                    v.push(i);
+                }
+            }
+            v
+        } else {
+            Vec::new()
+        }
+    } else {
+        (0..module.functions.len()).collect()
+    };
+    matches.sort_by_key(|i| std::cmp::Reverse(module.functions[*i].code_size));
     if matches.len() > cli.top {
         matches.truncate(cli.top);
     }
@@ -121,40 +181,61 @@ fn run_non_interactive(cli: &Cli, module: &WasmModuleInfo) -> Result<()> {
     Ok(())
 }
 
-#[derive(Debug)]
 struct App {
     wasm_path: String,
     module: WasmModuleInfo,
+
     indices: Vec<usize>,
+
     selected: usize,
+
     filter: String,
+
     in_search: bool,
+
     raw_names: bool,
+
     last_update: Instant,
+
     // cached wasm bytes for inspect mode
     wasm_bytes: Vec<u8>,
+
     // graph mode state
     graph_mode: bool,
+
     call_graph: CallGraph,
+
     graph_root: Option<u32>,
+
     expanded: std::collections::HashSet<u32>,
+
     tree_selected: usize,
+
     // inspect mode state
     inspect_mode: bool,
+
     // WAT lines and cursor for inspect
     wat_lines: Vec<WatLine>,
+
     wat_cursor: usize,
+
     // scroll offset for WAT pane (in lines)
     wat_scroll: u16,
+
     // scroll offset for Source pane (in lines)
     source_scroll: u16,
+
     // cached source spans
     source_span_cache: std::collections::HashMap<u32, wasm_poke::SourceSpan>,
+
     // precomputed name map (global index -> best name)
     name_map: std::collections::HashMap<u32, String>,
+
     // caches for inspect mode data and source file contents
     inspect_cache: std::collections::HashMap<u32, Vec<WatLine>>,
+
     source_file_cache: std::collections::HashMap<String, String>,
+    // removed pre-sorted cache; we compute sorted indices in refresh_indices
 }
 
 impl App {
@@ -193,23 +274,104 @@ impl App {
                 .iter()
                 .map(|f| (f.index, f.best_name()))
                 .collect(),
+
             // initialize caches
             inspect_cache: std::collections::HashMap::new(),
+
             source_file_cache: std::collections::HashMap::new(),
         };
+
         app.refresh_indices();
         app
     }
 
     fn refresh_indices(&mut self) {
-        self.indices = collect_sorted_indices(
-            &self.module,
-            if self.filter.is_empty() {
-                None
+        // Build sorted-by-size indices each refresh (fast and simple, avoids stale caches)
+        let mut all: Vec<usize> = (0..self.module.functions.len()).collect();
+        all.sort_by_key(|i| std::cmp::Reverse(self.module.functions[*i].code_size));
+
+        if self.filter.is_empty() {
+            self.indices = all;
+        } else {
+            // normalize pattern: if no '*', wrap as *pattern*
+
+            let pat = if self.filter.contains('*') {
+                self.filter.clone()
             } else {
-                Some(&self.filter)
-            },
-        );
+                format!("*{}*", self.filter)
+            };
+
+            // compile matcher once
+
+            let matcher = if let Ok(m) = GlobBuilder::new(&pat)
+                .case_insensitive(true)
+                .backslash_escape(false)
+                .build()
+                .map(|g| g.compile_matcher())
+            {
+                m
+            } else {
+                // invalid pattern -> no matches
+
+                self.indices.clear();
+
+                if self.selected >= self.indices.len() {
+                    self.selected = self.indices.len().saturating_sub(1);
+                }
+
+                return;
+            };
+
+            // filter against the freshly sorted indices
+            self.indices.clear();
+
+            for &i in &all {
+                let f = &self.module.functions[i];
+
+                let mut matched = false;
+
+                if let Some(ref d) = f.demangled_name {
+                    if matcher.is_match(d) {
+                        matched = true;
+                    }
+                }
+
+                if !matched {
+                    if let Some(ref r) = f.raw_name {
+                        if matcher.is_match(r) {
+                            matched = true;
+                        }
+                    }
+                }
+
+                if !matched {
+                    for e in &f.export_names {
+                        if matcher.is_match(e) {
+                            matched = true;
+
+                            break;
+                        }
+                    }
+                }
+
+                if !matched
+                    && f.demangled_name.is_none()
+                    && f.raw_name.is_none()
+                    && f.export_names.is_empty()
+                {
+                    let tmp = format!("func[{}]", f.index);
+
+                    if matcher.is_match(&tmp) {
+                        matched = true;
+                    }
+                }
+
+                if matched {
+                    self.indices.push(i);
+                }
+            }
+        }
+
         if self.selected >= self.indices.len() {
             self.selected = self.indices.len().saturating_sub(1);
         }
