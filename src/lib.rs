@@ -451,11 +451,11 @@ pub struct SourceSpan {
 
 // Cached DWARF/addr2line context to avoid reparsing per mapping call and to normalize addresses
 // relative to the first function body. Wrapped in a Mutex to satisfy Sync bounds for global statics.
-struct DwarfCtx {
+pub struct DwarfCtx {
     ctx: Addr2LineContext<EndianSlice<'static, LittleEndian>>,
     first_body_start: usize,
 }
-static DWARF_CONTEXT: OnceLock<Mutex<DwarfCtx>> = OnceLock::new();
+pub static DWARF_CONTEXT: OnceLock<Mutex<DwarfCtx>> = OnceLock::new();
 
 /// Initialize and cache a global DWARF context and the first function body start offset.
 /// Returns a reference to the cached context on success.
