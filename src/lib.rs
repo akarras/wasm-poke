@@ -8,11 +8,15 @@ use globset::GlobBuilder;
 use object::{Object, ObjectSection};
 use rustc_demangle::try_demangle;
 use serde::{Deserialize, Serialize};
-use wasmparser::{ExternalKind, Name, NameSectionReader, Operator, Parser, Payload, TypeRef};
+use wasmparser::{
+    BinaryReader, ExternalKind, Name, NameSectionReader, Operator, Parser, Payload, TypeRef,
+};
 
 // DWARF/source mapping deps
 use addr2line::Context as Addr2LineContext;
 use gimli::{self, EndianSlice, LittleEndian};
+
+pub mod help;
 
 /// Information about a single (defined) function in the module.
 ///
@@ -144,7 +148,7 @@ pub fn parse_wasm_from_bytes(bytes: &[u8]) -> Result<WasmModuleInfo> {
                 // Parse the "name" custom section if present.
                 if cs.name() == "name" {
                     // Safe to parse with NameSectionReader; it expects the raw custom section bytes.
-                    let ns = NameSectionReader::new(cs.data(), cs.data_offset());
+                    let ns = NameSectionReader::new(BinaryReader::new(cs.data(), cs.data_offset()));
                     for sub in ns {
                         match sub? {
                             Name::Function(fnames) => {
@@ -276,51 +280,86 @@ pub fn sorted_by_size<'a>(
 /// Returns true if the function matches the given wildcard pattern in any of its known names.
 /// Checks `best_name`, `raw_name`, `demangled_name`, and all export names.
 /// Matching is case-insensitive. If the pattern has no '*', we wrap as *pattern* (substring).
+///
+/// If `demangled_name` is available, we ONLY match against it.
+/// The pattern is split by whitespace, and ALL terms must match.
 pub fn function_matches(func: &FunctionInfo, pattern: &str) -> bool {
-    // keep existing behavior: if no '*' is present, wrap as *pattern*
-    let normalized = if pattern.contains('*') {
-        pattern.to_string()
-    } else {
-        format!("*{}*", pattern)
-    };
-
-    // build a case-insensitive glob matcher (compile once)
-    let glob = match GlobBuilder::new(&normalized)
-        .case_insensitive(true)
-        .backslash_escape(false)
-        .build()
-    {
-        Ok(g) => g,
-        Err(_) => return false,
-    };
-
-    let matcher = glob.compile_matcher();
-
-    // Avoid allocations: check borrowed names first, then fallback "func[index]" string
-    if let Some(ref d) = func.demangled_name {
-        if matcher.is_match(d) {
-            return true;
-        }
-    }
-    if let Some(ref r) = func.raw_name {
-        if matcher.is_match(r) {
-            return true;
-        }
-    }
-    for e in &func.export_names {
-        if matcher.is_match(e) {
-            return true;
-        }
+    let terms: Vec<&str> = pattern.split_whitespace().collect();
+    if terms.is_empty() {
+        return true;
     }
 
-    // Only if no name matched, consider fallback name
-    if func.demangled_name.is_none() && func.raw_name.is_none() && func.export_names.is_empty() {
-        let tmp = format!("func[{}]", func.index);
-        if matcher.is_match(&tmp) {
-            return true;
+    // Compile matchers for each term
+    let matchers: Vec<_> = terms
+        .iter()
+        .filter_map(|term| {
+            let normalized = if term.contains('*') {
+                term.to_string()
+            } else {
+                format!("*{}*", term)
+            };
+            GlobBuilder::new(&normalized)
+                .case_insensitive(true)
+                .backslash_escape(false)
+                .build()
+                .ok()
+                .map(|g| g.compile_matcher())
+        })
+        .collect();
+
+    if matchers.len() != terms.len() {
+        // If any term failed to compile (should be rare with globset), treat as no match
+        return false;
+    }
+
+    // Check if ALL terms match
+    for matcher in &matchers {
+        let mut term_matched = false;
+
+        // Check demangled name first
+        if let Some(ref d) = func.demangled_name {
+            if matcher.is_match(d) {
+                term_matched = true;
+            }
+        }
+
+        // If not matched yet, check raw name
+        if !term_matched {
+            if let Some(ref r) = func.raw_name {
+                if matcher.is_match(r) {
+                    term_matched = true;
+                }
+            }
+        }
+
+        // If not matched yet, check export names
+        if !term_matched {
+            for e in &func.export_names {
+                if matcher.is_match(e) {
+                    term_matched = true;
+                    break;
+                }
+            }
+        }
+
+        // Only check synthetic name if NO other names exist
+        if !term_matched
+            && func.demangled_name.is_none()
+            && func.raw_name.is_none()
+            && func.export_names.is_empty()
+        {
+            let tmp = format!("func[{}]", func.index);
+            if matcher.is_match(&tmp) {
+                term_matched = true;
+            }
+        }
+
+        if !term_matched {
+            return false;
         }
     }
-    false
+
+    true
 }
 
 /// Call graph of direct calls between functions identified by global indices.
@@ -956,6 +995,146 @@ pub fn disassemble_function_wat_bytes(wasm_bytes: &[u8], target_func_index: u32)
                             Operator::Unreachable => format!("{pad}unreachable"),
                             Operator::MemoryGrow { .. } => format!("{pad}memory.grow"),
                             Operator::MemorySize { .. } => format!("{pad}memory.size"),
+
+                            // Loads
+                            Operator::I32Load { memarg } => format!("{pad}i32.load offset={} align={}", memarg.offset, memarg.align),
+                            Operator::I64Load { memarg } => format!("{pad}i64.load offset={} align={}", memarg.offset, memarg.align),
+                            Operator::F32Load { memarg } => format!("{pad}f32.load offset={} align={}", memarg.offset, memarg.align),
+                            Operator::F64Load { memarg } => format!("{pad}f64.load offset={} align={}", memarg.offset, memarg.align),
+                            Operator::I32Load8S { memarg } => format!("{pad}i32.load8_s offset={} align={}", memarg.offset, memarg.align),
+                            Operator::I32Load8U { memarg } => format!("{pad}i32.load8_u offset={} align={}", memarg.offset, memarg.align),
+                            Operator::I32Load16S { memarg } => format!("{pad}i32.load16_s offset={} align={}", memarg.offset, memarg.align),
+                            Operator::I32Load16U { memarg } => format!("{pad}i32.load16_u offset={} align={}", memarg.offset, memarg.align),
+                            Operator::I64Load8S { memarg } => format!("{pad}i64.load8_s offset={} align={}", memarg.offset, memarg.align),
+                            Operator::I64Load8U { memarg } => format!("{pad}i64.load8_u offset={} align={}", memarg.offset, memarg.align),
+                            Operator::I64Load16S { memarg } => format!("{pad}i64.load16_s offset={} align={}", memarg.offset, memarg.align),
+                            Operator::I64Load16U { memarg } => format!("{pad}i64.load16_u offset={} align={}", memarg.offset, memarg.align),
+                            Operator::I64Load32S { memarg } => format!("{pad}i64.load32_s offset={} align={}", memarg.offset, memarg.align),
+                            Operator::I64Load32U { memarg } => format!("{pad}i64.load32_u offset={} align={}", memarg.offset, memarg.align),
+
+                            // Stores
+                            Operator::I32Store { memarg } => format!("{pad}i32.store offset={} align={}", memarg.offset, memarg.align),
+                            Operator::I64Store { memarg } => format!("{pad}i64.store offset={} align={}", memarg.offset, memarg.align),
+                            Operator::F32Store { memarg } => format!("{pad}f32.store offset={} align={}", memarg.offset, memarg.align),
+                            Operator::F64Store { memarg } => format!("{pad}f64.store offset={} align={}", memarg.offset, memarg.align),
+                            Operator::I32Store8 { memarg } => format!("{pad}i32.store8 offset={} align={}", memarg.offset, memarg.align),
+                            Operator::I32Store16 { memarg } => format!("{pad}i32.store16 offset={} align={}", memarg.offset, memarg.align),
+                            Operator::I64Store8 { memarg } => format!("{pad}i64.store8 offset={} align={}", memarg.offset, memarg.align),
+                            Operator::I64Store16 { memarg } => format!("{pad}i64.store16 offset={} align={}", memarg.offset, memarg.align),
+                            Operator::I64Store32 { memarg } => format!("{pad}i64.store32 offset={} align={}", memarg.offset, memarg.align),
+                            // Comparison
+                            Operator::I32Eqz => format!("{pad}i32.eqz"),
+                            Operator::I32Eq => format!("{pad}i32.eq"),
+                            Operator::I32Ne => format!("{pad}i32.ne"),
+                            Operator::I32LtS => format!("{pad}i32.lt_s"),
+                            Operator::I32LtU => format!("{pad}i32.lt_u"),
+                            Operator::I32GtS => format!("{pad}i32.gt_s"),
+                            Operator::I32GtU => format!("{pad}i32.gt_u"),
+                            Operator::I32LeS => format!("{pad}i32.le_s"),
+                            Operator::I32LeU => format!("{pad}i32.le_u"),
+                            Operator::I32GeS => format!("{pad}i32.ge_s"),
+                            Operator::I32GeU => format!("{pad}i32.ge_u"),
+
+                            Operator::I64Eqz => format!("{pad}i64.eqz"),
+                            Operator::I64Eq => format!("{pad}i64.eq"),
+                            Operator::I64Ne => format!("{pad}i64.ne"),
+                            Operator::I64LtS => format!("{pad}i64.lt_s"),
+                            Operator::I64LtU => format!("{pad}i64.lt_u"),
+                            Operator::I64GtS => format!("{pad}i64.gt_s"),
+                            Operator::I64GtU => format!("{pad}i64.gt_u"),
+                            Operator::I64LeS => format!("{pad}i64.le_s"),
+                            Operator::I64LeU => format!("{pad}i64.le_u"),
+                            Operator::I64GeS => format!("{pad}i64.ge_s"),
+                            Operator::I64GeU => format!("{pad}i64.ge_u"),
+
+                            Operator::F32Eq => format!("{pad}f32.eq"),
+                            Operator::F32Ne => format!("{pad}f32.ne"),
+                            Operator::F32Lt => format!("{pad}f32.lt"),
+                            Operator::F32Gt => format!("{pad}f32.gt"),
+                            Operator::F32Le => format!("{pad}f32.le"),
+                            Operator::F32Ge => format!("{pad}f32.ge"),
+
+                            Operator::F64Eq => format!("{pad}f64.eq"),
+                            Operator::F64Ne => format!("{pad}f64.ne"),
+                            Operator::F64Lt => format!("{pad}f64.lt"),
+                            Operator::F64Gt => format!("{pad}f64.gt"),
+                            Operator::F64Le => format!("{pad}f64.le"),
+                            Operator::F64Ge => format!("{pad}f64.ge"),
+
+                            // Bitwise & Numeric
+                            Operator::I32Clz => format!("{pad}i32.clz"),
+                            Operator::I32Ctz => format!("{pad}i32.ctz"),
+                            Operator::I32Popcnt => format!("{pad}i32.popcnt"),
+                            Operator::I32And => format!("{pad}i32.and"),
+                            Operator::I32Or => format!("{pad}i32.or"),
+                            Operator::I32Xor => format!("{pad}i32.xor"),
+                            Operator::I32Shl => format!("{pad}i32.shl"),
+                            Operator::I32ShrS => format!("{pad}i32.shr_s"),
+                            Operator::I32ShrU => format!("{pad}i32.shr_u"),
+                            Operator::I32Rotl => format!("{pad}i32.rotl"),
+                            Operator::I32Rotr => format!("{pad}i32.rotr"),
+
+                            Operator::I64Clz => format!("{pad}i64.clz"),
+                            Operator::I64Ctz => format!("{pad}i64.ctz"),
+                            Operator::I64Popcnt => format!("{pad}i64.popcnt"),
+                            Operator::I64And => format!("{pad}i64.and"),
+                            Operator::I64Or => format!("{pad}i64.or"),
+                            Operator::I64Xor => format!("{pad}i64.xor"),
+                            Operator::I64Shl => format!("{pad}i64.shl"),
+                            Operator::I64ShrS => format!("{pad}i64.shr_s"),
+                            Operator::I64ShrU => format!("{pad}i64.shr_u"),
+                            Operator::I64Rotl => format!("{pad}i64.rotl"),
+                            Operator::I64Rotr => format!("{pad}i64.rotr"),
+
+                            Operator::F32Abs => format!("{pad}f32.abs"),
+                            Operator::F32Neg => format!("{pad}f32.neg"),
+                            Operator::F32Ceil => format!("{pad}f32.ceil"),
+                            Operator::F32Floor => format!("{pad}f32.floor"),
+                            Operator::F32Trunc => format!("{pad}f32.trunc"),
+                            Operator::F32Nearest => format!("{pad}f32.nearest"),
+                            Operator::F32Sqrt => format!("{pad}f32.sqrt"),
+                            Operator::F32Min => format!("{pad}f32.min"),
+                            Operator::F32Max => format!("{pad}f32.max"),
+                            Operator::F32Copysign => format!("{pad}f32.copysign"),
+
+                            Operator::F64Abs => format!("{pad}f64.abs"),
+                            Operator::F64Neg => format!("{pad}f64.neg"),
+                            Operator::F64Ceil => format!("{pad}f64.ceil"),
+                            Operator::F64Floor => format!("{pad}f64.floor"),
+                            Operator::F64Trunc => format!("{pad}f64.trunc"),
+                            Operator::F64Nearest => format!("{pad}f64.nearest"),
+                            Operator::F64Sqrt => format!("{pad}f64.sqrt"),
+                            Operator::F64Min => format!("{pad}f64.min"),
+                            Operator::F64Max => format!("{pad}f64.max"),
+                            Operator::F64Copysign => format!("{pad}f64.copysign"),
+
+                            // Conversions
+                            Operator::I32WrapI64 => format!("{pad}i32.wrap_i64"),
+                            Operator::I32TruncF32S => format!("{pad}i32.trunc_f32_s"),
+                            Operator::I32TruncF32U => format!("{pad}i32.trunc_f32_u"),
+                            Operator::I32TruncF64S => format!("{pad}i32.trunc_f64_s"),
+                            Operator::I32TruncF64U => format!("{pad}i32.trunc_f64_u"),
+                            Operator::I64ExtendI32S => format!("{pad}i64.extend_i32_s"),
+                            Operator::I64ExtendI32U => format!("{pad}i64.extend_i32_u"),
+                            Operator::I64TruncF32S => format!("{pad}i64.trunc_f32_s"),
+                            Operator::I64TruncF32U => format!("{pad}i64.trunc_f32_u"),
+                            Operator::I64TruncF64S => format!("{pad}i64.trunc_f64_s"),
+                            Operator::I64TruncF64U => format!("{pad}i64.trunc_f64_u"),
+                            Operator::F32ConvertI32S => format!("{pad}f32.convert_i32_s"),
+                            Operator::F32ConvertI32U => format!("{pad}f32.convert_i32_u"),
+                            Operator::F32ConvertI64S => format!("{pad}f32.convert_i64_s"),
+                            Operator::F32ConvertI64U => format!("{pad}f32.convert_i64_u"),
+                            Operator::F32DemoteF64 => format!("{pad}f32.demote_f64"),
+                            Operator::F64ConvertI32S => format!("{pad}f64.convert_i32_s"),
+                            Operator::F64ConvertI32U => format!("{pad}f64.convert_i32_u"),
+                            Operator::F64ConvertI64S => format!("{pad}f64.convert_i64_s"),
+                            Operator::F64ConvertI64U => format!("{pad}f64.convert_i64_u"),
+                            Operator::F64PromoteF32 => format!("{pad}f64.promote_f32"),
+                            Operator::I32ReinterpretF32 => format!("{pad}i32.reinterpret_f32"),
+                            Operator::I64ReinterpretF64 => format!("{pad}i64.reinterpret_f64"),
+                            Operator::F32ReinterpretI32 => format!("{pad}f32.reinterpret_i32"),
+                            Operator::F64ReinterpretI64 => format!("{pad}f64.reinterpret_i64"),
+
                             other => format!("{pad};; {:?}", other),
                         };
 
@@ -1182,7 +1361,147 @@ pub fn disassemble_function_wat_lines(
                             Operator::MemoryGrow { .. } => format!("{pad}memory.grow"),
                             Operator::MemorySize { .. } => format!("{pad}memory.size"),
 
+                            // Loads
+                            Operator::I32Load { memarg } => format!("{pad}i32.load offset={} align={}", memarg.offset, memarg.align),
+                            Operator::I64Load { memarg } => format!("{pad}i64.load offset={} align={}", memarg.offset, memarg.align),
+                            Operator::F32Load { memarg } => format!("{pad}f32.load offset={} align={}", memarg.offset, memarg.align),
+                            Operator::F64Load { memarg } => format!("{pad}f64.load offset={} align={}", memarg.offset, memarg.align),
+                            Operator::I32Load8S { memarg } => format!("{pad}i32.load8_s offset={} align={}", memarg.offset, memarg.align),
+                            Operator::I32Load8U { memarg } => format!("{pad}i32.load8_u offset={} align={}", memarg.offset, memarg.align),
+                            Operator::I32Load16S { memarg } => format!("{pad}i32.load16_s offset={} align={}", memarg.offset, memarg.align),
+                            Operator::I32Load16U { memarg } => format!("{pad}i32.load16_u offset={} align={}", memarg.offset, memarg.align),
+                            Operator::I64Load8S { memarg } => format!("{pad}i64.load8_s offset={} align={}", memarg.offset, memarg.align),
+                            Operator::I64Load8U { memarg } => format!("{pad}i64.load8_u offset={} align={}", memarg.offset, memarg.align),
+                            Operator::I64Load16S { memarg } => format!("{pad}i64.load16_s offset={} align={}", memarg.offset, memarg.align),
+                            Operator::I64Load16U { memarg } => format!("{pad}i64.load16_u offset={} align={}", memarg.offset, memarg.align),
+                            Operator::I64Load32S { memarg } => format!("{pad}i64.load32_s offset={} align={}", memarg.offset, memarg.align),
+                            Operator::I64Load32U { memarg } => format!("{pad}i64.load32_u offset={} align={}", memarg.offset, memarg.align),
+
+                            // Stores
+                            Operator::I32Store { memarg } => format!("{pad}i32.store offset={} align={}", memarg.offset, memarg.align),
+                            Operator::I64Store { memarg } => format!("{pad}i64.store offset={} align={}", memarg.offset, memarg.align),
+                            Operator::F32Store { memarg } => format!("{pad}f32.store offset={} align={}", memarg.offset, memarg.align),
+                            Operator::F64Store { memarg } => format!("{pad}f64.store offset={} align={}", memarg.offset, memarg.align),
+                            Operator::I32Store8 { memarg } => format!("{pad}i32.store8 offset={} align={}", memarg.offset, memarg.align),
+                            Operator::I32Store16 { memarg } => format!("{pad}i32.store16 offset={} align={}", memarg.offset, memarg.align),
+                            Operator::I64Store8 { memarg } => format!("{pad}i64.store8 offset={} align={}", memarg.offset, memarg.align),
+                            Operator::I64Store16 { memarg } => format!("{pad}i64.store16 offset={} align={}", memarg.offset, memarg.align),
+                            Operator::I64Store32 { memarg } => format!("{pad}i64.store32 offset={} align={}", memarg.offset, memarg.align),
+
                             // default
+                            // Comparison
+                            Operator::I32Eqz => format!("{pad}i32.eqz"),
+                            Operator::I32Eq => format!("{pad}i32.eq"),
+                            Operator::I32Ne => format!("{pad}i32.ne"),
+                            Operator::I32LtS => format!("{pad}i32.lt_s"),
+                            Operator::I32LtU => format!("{pad}i32.lt_u"),
+                            Operator::I32GtS => format!("{pad}i32.gt_s"),
+                            Operator::I32GtU => format!("{pad}i32.gt_u"),
+                            Operator::I32LeS => format!("{pad}i32.le_s"),
+                            Operator::I32LeU => format!("{pad}i32.le_u"),
+                            Operator::I32GeS => format!("{pad}i32.ge_s"),
+                            Operator::I32GeU => format!("{pad}i32.ge_u"),
+
+                            Operator::I64Eqz => format!("{pad}i64.eqz"),
+                            Operator::I64Eq => format!("{pad}i64.eq"),
+                            Operator::I64Ne => format!("{pad}i64.ne"),
+                            Operator::I64LtS => format!("{pad}i64.lt_s"),
+                            Operator::I64LtU => format!("{pad}i64.lt_u"),
+                            Operator::I64GtS => format!("{pad}i64.gt_s"),
+                            Operator::I64GtU => format!("{pad}i64.gt_u"),
+                            Operator::I64LeS => format!("{pad}i64.le_s"),
+                            Operator::I64LeU => format!("{pad}i64.le_u"),
+                            Operator::I64GeS => format!("{pad}i64.ge_s"),
+                            Operator::I64GeU => format!("{pad}i64.ge_u"),
+
+                            Operator::F32Eq => format!("{pad}f32.eq"),
+                            Operator::F32Ne => format!("{pad}f32.ne"),
+                            Operator::F32Lt => format!("{pad}f32.lt"),
+                            Operator::F32Gt => format!("{pad}f32.gt"),
+                            Operator::F32Le => format!("{pad}f32.le"),
+                            Operator::F32Ge => format!("{pad}f32.ge"),
+
+                            Operator::F64Eq => format!("{pad}f64.eq"),
+                            Operator::F64Ne => format!("{pad}f64.ne"),
+                            Operator::F64Lt => format!("{pad}f64.lt"),
+                            Operator::F64Gt => format!("{pad}f64.gt"),
+                            Operator::F64Le => format!("{pad}f64.le"),
+                            Operator::F64Ge => format!("{pad}f64.ge"),
+
+                            // Bitwise & Numeric
+                            Operator::I32Clz => format!("{pad}i32.clz"),
+                            Operator::I32Ctz => format!("{pad}i32.ctz"),
+                            Operator::I32Popcnt => format!("{pad}i32.popcnt"),
+                            Operator::I32And => format!("{pad}i32.and"),
+                            Operator::I32Or => format!("{pad}i32.or"),
+                            Operator::I32Xor => format!("{pad}i32.xor"),
+                            Operator::I32Shl => format!("{pad}i32.shl"),
+                            Operator::I32ShrS => format!("{pad}i32.shr_s"),
+                            Operator::I32ShrU => format!("{pad}i32.shr_u"),
+                            Operator::I32Rotl => format!("{pad}i32.rotl"),
+                            Operator::I32Rotr => format!("{pad}i32.rotr"),
+
+                            Operator::I64Clz => format!("{pad}i64.clz"),
+                            Operator::I64Ctz => format!("{pad}i64.ctz"),
+                            Operator::I64Popcnt => format!("{pad}i64.popcnt"),
+                            Operator::I64And => format!("{pad}i64.and"),
+                            Operator::I64Or => format!("{pad}i64.or"),
+                            Operator::I64Xor => format!("{pad}i64.xor"),
+                            Operator::I64Shl => format!("{pad}i64.shl"),
+                            Operator::I64ShrS => format!("{pad}i64.shr_s"),
+                            Operator::I64ShrU => format!("{pad}i64.shr_u"),
+                            Operator::I64Rotl => format!("{pad}i64.rotl"),
+                            Operator::I64Rotr => format!("{pad}i64.rotr"),
+
+                            Operator::F32Abs => format!("{pad}f32.abs"),
+                            Operator::F32Neg => format!("{pad}f32.neg"),
+                            Operator::F32Ceil => format!("{pad}f32.ceil"),
+                            Operator::F32Floor => format!("{pad}f32.floor"),
+                            Operator::F32Trunc => format!("{pad}f32.trunc"),
+                            Operator::F32Nearest => format!("{pad}f32.nearest"),
+                            Operator::F32Sqrt => format!("{pad}f32.sqrt"),
+                            Operator::F32Min => format!("{pad}f32.min"),
+                            Operator::F32Max => format!("{pad}f32.max"),
+                            Operator::F32Copysign => format!("{pad}f32.copysign"),
+
+                            Operator::F64Abs => format!("{pad}f64.abs"),
+                            Operator::F64Neg => format!("{pad}f64.neg"),
+                            Operator::F64Ceil => format!("{pad}f64.ceil"),
+                            Operator::F64Floor => format!("{pad}f64.floor"),
+                            Operator::F64Trunc => format!("{pad}f64.trunc"),
+                            Operator::F64Nearest => format!("{pad}f64.nearest"),
+                            Operator::F64Sqrt => format!("{pad}f64.sqrt"),
+                            Operator::F64Min => format!("{pad}f64.min"),
+                            Operator::F64Max => format!("{pad}f64.max"),
+                            Operator::F64Copysign => format!("{pad}f64.copysign"),
+
+                            // Conversions
+                            Operator::I32WrapI64 => format!("{pad}i32.wrap_i64"),
+                            Operator::I32TruncF32S => format!("{pad}i32.trunc_f32_s"),
+                            Operator::I32TruncF32U => format!("{pad}i32.trunc_f32_u"),
+                            Operator::I32TruncF64S => format!("{pad}i32.trunc_f64_s"),
+                            Operator::I32TruncF64U => format!("{pad}i32.trunc_f64_u"),
+                            Operator::I64ExtendI32S => format!("{pad}i64.extend_i32_s"),
+                            Operator::I64ExtendI32U => format!("{pad}i64.extend_i32_u"),
+                            Operator::I64TruncF32S => format!("{pad}i64.trunc_f32_s"),
+                            Operator::I64TruncF32U => format!("{pad}i64.trunc_f32_u"),
+                            Operator::I64TruncF64S => format!("{pad}i64.trunc_f64_s"),
+                            Operator::I64TruncF64U => format!("{pad}i64.trunc_f64_u"),
+                            Operator::F32ConvertI32S => format!("{pad}f32.convert_i32_s"),
+                            Operator::F32ConvertI32U => format!("{pad}f32.convert_i32_u"),
+                            Operator::F32ConvertI64S => format!("{pad}f32.convert_i64_s"),
+                            Operator::F32ConvertI64U => format!("{pad}f32.convert_i64_u"),
+                            Operator::F32DemoteF64 => format!("{pad}f32.demote_f64"),
+                            Operator::F64ConvertI32S => format!("{pad}f64.convert_i32_s"),
+                            Operator::F64ConvertI32U => format!("{pad}f64.convert_i32_u"),
+                            Operator::F64ConvertI64S => format!("{pad}f64.convert_i64_s"),
+                            Operator::F64ConvertI64U => format!("{pad}f64.convert_i64_u"),
+                            Operator::F64PromoteF32 => format!("{pad}f64.promote_f32"),
+                            Operator::I32ReinterpretF32 => format!("{pad}i32.reinterpret_f32"),
+                            Operator::I64ReinterpretF64 => format!("{pad}i64.reinterpret_f64"),
+                            Operator::F32ReinterpretI32 => format!("{pad}f32.reinterpret_i32"),
+                            Operator::F64ReinterpretI64 => format!("{pad}f64.reinterpret_i64"),
+
                             other => format!("{pad};; {:?}", other),
                         };
 

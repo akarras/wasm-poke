@@ -236,6 +236,9 @@ struct App {
 
     source_file_cache: std::collections::HashMap<String, String>,
     // removed pre-sorted cache; we compute sorted indices in refresh_indices
+
+    // Help popup state
+    help_popup: Option<String>,
 }
 
 impl App {
@@ -279,6 +282,7 @@ impl App {
             inspect_cache: std::collections::HashMap::new(),
 
             source_file_cache: std::collections::HashMap::new(),
+            help_popup: None,
         };
 
         app.refresh_indices();
@@ -293,80 +297,86 @@ impl App {
         if self.filter.is_empty() {
             self.indices = all;
         } else {
-            // normalize pattern: if no '*', wrap as *pattern*
+            let terms: Vec<&str> = self.filter.split_whitespace().collect();
+            
+            // compile matchers for each term
+            let matchers: Vec<_> = terms
+                .iter()
+                .filter_map(|term| {
+                    let normalized = if term.contains('*') {
+                        term.to_string()
+                    } else {
+                        format!("*{}*", term)
+                    };
+                    GlobBuilder::new(&normalized)
+                        .case_insensitive(true)
+                        .backslash_escape(false)
+                        .build()
+                        .ok()
+                        .map(|g| g.compile_matcher())
+                })
+                .collect();
 
-            let pat = if self.filter.contains('*') {
-                self.filter.clone()
-            } else {
-                format!("*{}*", self.filter)
-            };
-
-            // compile matcher once
-
-            let matcher = if let Ok(m) = GlobBuilder::new(&pat)
-                .case_insensitive(true)
-                .backslash_escape(false)
-                .build()
-                .map(|g| g.compile_matcher())
-            {
-                m
-            } else {
+            if matchers.len() != terms.len() {
                 // invalid pattern -> no matches
-
                 self.indices.clear();
-
                 if self.selected >= self.indices.len() {
                     self.selected = self.indices.len().saturating_sub(1);
                 }
-
                 return;
-            };
+            }
 
             // filter against the freshly sorted indices
             self.indices.clear();
 
             for &i in &all {
                 let f = &self.module.functions[i];
+                let mut all_terms_matched = true;
 
-                let mut matched = false;
+                for matcher in &matchers {
+                    let mut term_matched = false;
 
-                if let Some(ref d) = f.demangled_name {
-                    if matcher.is_match(d) {
-                        matched = true;
-                    }
-                }
-
-                if !matched {
-                    if let Some(ref r) = f.raw_name {
-                        if matcher.is_match(r) {
-                            matched = true;
+                    if let Some(ref d) = f.demangled_name {
+                        if matcher.is_match(d) {
+                            term_matched = true;
                         }
                     }
-                }
 
-                if !matched {
-                    for e in &f.export_names {
-                        if matcher.is_match(e) {
-                            matched = true;
-
-                            break;
+                    if !term_matched {
+                        if let Some(ref r) = f.raw_name {
+                            if matcher.is_match(r) {
+                                term_matched = true;
+                            }
                         }
                     }
-                }
 
-                if !matched
-                    && f.demangled_name.is_none()
-                    && f.raw_name.is_none()
-                    && f.export_names.is_empty()
-                {
-                    let tmp = format!("func[{}]", f.index);
+                    if !term_matched {
+                        for e in &f.export_names {
+                            if matcher.is_match(e) {
+                                term_matched = true;
+                                break;
+                            }
+                        }
+                    }
 
-                    if matcher.is_match(&tmp) {
-                        matched = true;
+                    if !term_matched
+                        && f.demangled_name.is_none()
+                        && f.raw_name.is_none()
+                        && f.export_names.is_empty()
+                    {
+                        let tmp = format!("func[{}]", f.index);
+                        if matcher.is_match(&tmp) {
+                            term_matched = true;
+                        }
+                    }
+
+                    if !term_matched {
+                        all_terms_matched = false;
+                        break;
                     }
                 }
 
-                if matched {
+                if all_terms_matched {
                     self.indices.push(i);
                 }
             }
@@ -436,6 +446,17 @@ impl App {
                         self.filter.push(c);
                         self.refresh_indices();
                     }
+                }
+                _ => {}
+            }
+            return false;
+        }
+
+        // Help popup handling
+        if self.help_popup.is_some() {
+            match key.code {
+                KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') | KeyCode::Char('?') => {
+                    self.help_popup = None;
                 }
                 _ => {}
             }
@@ -563,6 +584,21 @@ impl App {
                         }
                     }
                 }
+                KeyCode::Char('?') => {
+                    if self.inspect_mode {
+                        if let Some(line) = self.wat_lines.get(self.wat_cursor) {
+                            // Extract mnemonic: first token after trimming whitespace
+                            let trimmed = line.text.trim();
+                            if let Some(mnemonic) = trimmed.split_whitespace().next() {
+                                if let Some(help) = wasm_poke::help::get_instruction_help(mnemonic) {
+                                    self.help_popup = Some(format!("{} — {}", mnemonic, help));
+                                } else {
+                                    self.help_popup = Some(format!("No help available for '{}'", mnemonic));
+                                }
+                            }
+                        }
+                    }
+                }
                 _ => {}
             }
             return false;
@@ -571,12 +607,86 @@ impl App {
         match key.code {
             KeyCode::Char('q') => return true,
             KeyCode::Char('g') => {
-                // enter graph mode with current selection as root
-                if let Some(f) = self.selected_function() {
-                    self.graph_root = Some(f.index);
-                    self.expanded.clear();
-                    self.tree_selected = 0;
-                    self.graph_mode = true;
+                if self.inspect_mode {
+                    // "Goto" definition if on a call instruction
+                    if let Some(line) = self.wat_lines.get(self.wat_cursor) {
+                        let trimmed = line.text.trim();
+                        // Check for "call <index>"
+                        // The format from lib.rs is "call {function_index}"
+                        if let Some(rest) = trimmed.strip_prefix("call ") {
+                            // The rest should be the index (and maybe comments)
+                            let token = rest.split_whitespace().next().unwrap_or("");
+                            if let Ok(target_idx) = token.parse::<u32>() {
+                                // We found a target!
+                                // 1. Ensure we are in graph mode (conceptually)
+                                if !self.graph_mode {
+                                    // If we were in list mode, we need to "start" graph mode
+                                    // effectively rooting at the *current* function (caller),
+                                    // then expanding to the callee.
+                                    if let Some(current_func) = self.selected_function() {
+                                        self.graph_root = Some(current_func.index);
+                                        self.expanded.clear();
+                                        self.tree_selected = 0;
+                                        self.graph_mode = true;
+                                    }
+                                }
+
+                                // 2. Now we are in graph mode. We need to find the row for `target_idx`
+                                //    that is a child of the currently selected tree node.
+                                
+                                // First, expand the current node so children are visible
+                                if let Some(rows) = self.visible_tree_rows() {
+                                    if let Some(current_row) = rows.get(self.tree_selected) {
+                                        self.expanded.insert(current_row.index);
+                                    }
+                                }
+
+                                // Recompute rows after expansion
+                                if let Some(rows) = self.visible_tree_rows() {
+                                    // We need to find the *new* row index that corresponds to `target_idx`
+                                    // AND is a direct child of the node we just expanded.
+                                    // The currently selected node (parent) is at `self.tree_selected`.
+                                    // Its children will follow immediately after.
+                                    
+                                    // Let's find the parent's depth
+                                    if let Some(parent_row) = rows.get(self.tree_selected) {
+                                        let parent_depth = parent_row.depth;
+                                        // Scan forward for the child
+                                        for (i, row) in rows.iter().enumerate().skip(self.tree_selected + 1) {
+                                            if row.depth <= parent_depth {
+                                                // We've gone past the children
+                                                break;
+                                            }
+                                            if row.depth == parent_depth + 1 && row.index == target_idx {
+                                                // Found it!
+                                                self.tree_selected = i;
+                                                
+                                                // 3. Update inspect view to the new function
+                                                self.wat_scroll = 0;
+                                                self.source_scroll = 0;
+                                                self.wat_cursor = 0;
+                                                self.ensure_inspect_assets(target_idx);
+                                                self.wat_lines = self
+                                                    .inspect_cache
+                                                    .get(&target_idx)
+                                                    .cloned()
+                                                    .unwrap_or_default();
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    // enter graph mode with current selection as root (original behavior)
+                    if let Some(f) = self.selected_function() {
+                        self.graph_root = Some(f.index);
+                        self.expanded.clear();
+                        self.tree_selected = 0;
+                        self.graph_mode = true;
+                    }
                 }
             }
             KeyCode::Char('i') | KeyCode::Char('I') => {
@@ -649,6 +759,21 @@ impl App {
             KeyCode::End => {
                 if !self.indices.is_empty() {
                     self.selected = self.indices.len() - 1;
+                }
+            }
+            KeyCode::Char('?') => {
+                if self.inspect_mode {
+                    if let Some(line) = self.wat_lines.get(self.wat_cursor) {
+                        // Extract mnemonic: first token after trimming whitespace
+                        let trimmed = line.text.trim();
+                        if let Some(mnemonic) = trimmed.split_whitespace().next() {
+                            if let Some(help) = wasm_poke::help::get_instruction_help(mnemonic) {
+                                self.help_popup = Some(format!("{} — {}", mnemonic, help));
+                            } else {
+                                self.help_popup = Some(format!("No help available for '{}'", mnemonic));
+                            }
+                        }
+                    }
                 }
             }
             _ => {}
@@ -835,11 +960,27 @@ fn draw_ui(f: &mut ratatui::Frame<'_>, app: &mut App) {
             Constraint::Min(5),
             Constraint::Length(3),
         ])
-        .split(f.size());
+        .split(f.area());
 
     draw_header(f, chunks[0], app);
     draw_table(f, chunks[1], app);
     draw_footer(f, chunks[2], app);
+
+    if let Some(text) = &app.help_popup {
+        let area = f.area();
+        let popup_area = Rect {
+            x: area.width.saturating_sub(60) / 2,
+            y: area.height.saturating_sub(10) / 2,
+            width: 60.min(area.width),
+            height: 10.min(area.height),
+        };
+        f.render_widget(ratatui::widgets::Clear, popup_area);
+        let p = Paragraph::new(text.as_str())
+            .block(Block::default().borders(Borders::ALL).title(" Instruction Help "))
+            .wrap(Wrap { trim: true })
+            .style(Style::default().fg(Color::White).bg(Color::Blue));
+        f.render_widget(p, popup_area);
+    }
 }
 
 fn draw_header(f: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
@@ -982,15 +1123,45 @@ fn draw_table(f: &mut ratatui::Frame<'_>, area: Rect, app: &mut App) {
         let total_wat_lines = wat_lines.len();
         let cursor = app.wat_cursor.min(total_wat_lines.saturating_sub(1));
 
+        // Symbol Name Header
+        let func = &app.module.functions[current_index as usize];
+        let full_name = display_name(func, app.raw_names);
+
+        // Calculate required height for the name
+        let available_width = area.width.saturating_sub(2);
+        let name_len = full_name.len() as u16;
+        // integer ceil div
+        let name_lines = (name_len + available_width.saturating_sub(1)) / available_width.max(1);
+        // Clamp to a reasonable maximum to avoid taking up the whole screen if something goes wrong, 
+        // but 10 lines is plenty for a name.
+        let header_height = (name_lines + 2).min(10); 
+
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(header_height),
+                Constraint::Min(0),
+            ])
+            .split(area);
+
+        let header_area = chunks[0];
+        let content_area = chunks[1];
+
+        let header_paragraph = Paragraph::new(full_name)
+            .block(Block::default().borders(Borders::ALL).title(" Symbol "))
+            .style(Style::default().fg(Color::Cyan))
+            .wrap(Wrap { trim: true });
+        f.render_widget(header_paragraph, header_area);
+
         // Split horizontally into three panes: Hex | WAT | Source
         let cols = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
-                Constraint::Percentage(34),
-                Constraint::Percentage(33),
-                Constraint::Percentage(33),
+                Constraint::Length(79), // Fixed width for Hex (77 content + 2 border)
+                Constraint::Percentage(50),
+                Constraint::Percentage(50),
             ])
-            .split(area);
+            .split(content_area);
 
         // HEX pane: window around selected byte and color that byte
         let visible_hex_lines: usize = cols[0].height.saturating_sub(2) as usize;
@@ -1286,7 +1457,7 @@ fn draw_table(f: &mut ratatui::Frame<'_>, area: Rect, app: &mut App) {
                     .borders(Borders::ALL)
                     .title(" Call Graph (g to toggle) "),
             )
-            .highlight_style(Style::default().fg(Color::Black).bg(Color::White))
+            .row_highlight_style(Style::default().fg(Color::Black).bg(Color::White))
             .column_spacing(1);
 
         let mut state = TableState::default();
@@ -1352,7 +1523,7 @@ fn draw_table(f: &mut ratatui::Frame<'_>, area: Rect, app: &mut App) {
                 .borders(Borders::ALL)
                 .title(" Functions by size (desc) "),
         )
-        .highlight_style(Style::default().fg(Color::Black).bg(Color::White))
+        .row_highlight_style(Style::default().fg(Color::Black).bg(Color::White))
         .column_spacing(1);
 
     let mut state = TableState::default();
@@ -1479,7 +1650,11 @@ fn draw_footer(f: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw(" graph  "),
+        Span::raw(if app.inspect_mode {
+            " GOTO  "
+        } else {
+            " graph  "
+        }),
         Span::styled(
             "i",
             Style::default()
