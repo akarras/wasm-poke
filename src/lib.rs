@@ -492,7 +492,7 @@ pub struct SourceSpan {
 // relative to the first function body. Wrapped in a Mutex to satisfy Sync bounds for global statics.
 pub struct DwarfCtx {
     ctx: Addr2LineContext<EndianSlice<'static, LittleEndian>>,
-    first_body_start: usize,
+    code_section_start: usize,
 }
 pub static DWARF_CONTEXT: OnceLock<Mutex<DwarfCtx>> = OnceLock::new();
 
@@ -547,18 +547,18 @@ pub fn init_dwarf_context(wasm_bytes: &[u8]) -> Option<&'static Mutex<DwarfCtx>>
 
     let ctx = Addr2LineContext::from_dwarf(dwarf).ok()?;
 
-    // Compute first function body start once for module-relative address translation
-    let mut first_body_start: usize = 0;
+    // Compute Code section start for module-relative address translation
+    let mut code_section_start: usize = 0;
     for payload in wasmparser::Parser::new(0).parse_all(wasm_bytes) {
-        if let Ok(wasmparser::Payload::CodeSectionEntry(body)) = payload {
-            first_body_start = body.get_binary_reader().range().start;
+        if let Ok(wasmparser::Payload::CodeSectionStart { range, .. }) = payload {
+            code_section_start = range.start;
             break;
         }
     }
 
     let _ = DWARF_CONTEXT.set(Mutex::new(DwarfCtx {
         ctx,
-        first_body_start,
+        code_section_start,
     }));
     DWARF_CONTEXT.get()
 }
@@ -579,7 +579,8 @@ pub fn map_instr_to_source_fast(
         init_dwarf_context(wasm_bytes)?.lock().ok()?
     };
 
-    let base = range.start.saturating_sub(dc.first_body_start);
+    let base = range.start.saturating_sub(dc.code_section_start);
+
     let address = (base + body_offset) as u64;
 
     let mut loc = dc.ctx.find_location(address).ok().flatten();
@@ -651,7 +652,7 @@ pub fn map_instr_to_source(
 
     let body_start = func_body_start?;
     // Normalize to module-relative address space used by addr2line
-    let base = body_start.saturating_sub(dc.first_body_start);
+    let base = body_start.saturating_sub(dc.code_section_start);
     let address = (base + body_offset) as u64;
 
     let mut loc = dc.ctx.find_location(address).ok().flatten();
@@ -735,7 +736,7 @@ pub fn function_source_span(wasm_bytes: &[u8], func_index: u32) -> Option<Source
     let mut file_stats: Map<String, (u32, u32, u32, u32, u32)> = Map::new();
 
     // Normalize to the module-relative "address space" used by addr2line context.
-    let base = start.saturating_sub(dc.first_body_start);
+    let base = start.saturating_sub(dc.code_section_start);
 
     // Sample offsets 0..min(body_len, 8192) stepping by 4 bytes (coarse but fast)
     let max_probe = body_len.min(8192);

@@ -7,8 +7,12 @@ edition = "2021"
 opt-level = 3
 codegen-units = 1
 
+[profile.release-debug]
+inherits = "release"
+debug = true
+
 [workspace]
-members = ["fixtures/simple-wasm"]
+members = ["tests/fixtures/*"]
 
 [features]
 default = []

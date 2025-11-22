@@ -43,7 +43,7 @@ Install/build
 
 Workspace layout
 - Main crate: this package (binary + library).
-- Fixture crate: fixtures/simple-wasm (cdylib compiled to wasm); used to generate a small .wasm for tests/examples.
+- Fixture crate: tests/fixtures/simple-wasm (cdylib compiled to wasm); used to generate a small .wasm for tests/examples.
 
 Unit tests (feature-gated include_bytes, copy wasm locally)
 By default, fixture-backed tests are disabled. To run them, enable the `fixture-tests` feature and copy the built fixture wasm into `tests/fixtures/simple_wasm.wasm`. This keeps the artifact out of release builds.

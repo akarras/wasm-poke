@@ -207,7 +207,7 @@ struct App {
 
     graph_root: Option<u32>,
 
-    expanded: std::collections::HashSet<u32>,
+    expanded: std::collections::HashSet<Vec<(u32, usize)>>,
 
     tree_selected: usize,
 
@@ -239,6 +239,12 @@ struct App {
 
     // Help popup state
     help_popup: Option<String>,
+
+    // Scroll offset for the graph tree view
+    tree_scroll: usize,
+
+    // Scroll offset for the main list view
+    main_scroll: usize,
 }
 
 impl App {
@@ -283,6 +289,8 @@ impl App {
 
             source_file_cache: std::collections::HashMap::new(),
             help_popup: None,
+            tree_scroll: 0,
+            main_scroll: 0,
         };
 
         app.refresh_indices();
@@ -481,56 +489,48 @@ impl App {
                 KeyCode::Char('j') | KeyCode::Char('J') | KeyCode::Down => {
                     if self.inspect_mode {
                         self.wat_cursor = self.wat_cursor.saturating_add(1);
-                    } else if let Some(rows) = self.visible_tree_rows() {
-                        let max = rows.len().saturating_sub(1);
+                    } else {
+                        let (total, _) = self.compute_tree_view(Some(0..0));
+                        let max = total.saturating_sub(1);
                         self.tree_selected = (self.tree_selected + 1).min(max);
                     }
                 }
                 KeyCode::Left | KeyCode::Char('h') | KeyCode::Char('H') => {
                     // collapse current node if expanded
-                    if let Some(rows) = self.visible_tree_rows() {
-                        let max = rows.len().saturating_sub(1);
-                        if self.tree_selected > max {
-                            self.tree_selected = max;
-                        }
-                        if let Some(row) = rows.get(self.tree_selected) {
-                            if self.expanded.remove(&row.index) {
-                                // collapsed current node
-                            } else if self.tree_selected > 0 {
-                                // if not expanded, try to move selection to parent (upwards)
-                                self.tree_selected -= 1;
-                            }
+                    // Get current row
+                    let (_, rows) = self.compute_tree_view(Some(self.tree_selected..self.tree_selected + 1));
+                    if let Some(row) = rows.first() {
+                        if self.expanded.remove(&row.path) {
+                            // collapsed current node
+                        } else if self.tree_selected > 0 {
+                            // if not expanded, try to move selection to parent (upwards)
+                            self.tree_selected -= 1;
                         }
                     }
                 }
                 KeyCode::Right | KeyCode::Enter | KeyCode::Char('l') | KeyCode::Char('L') => {
-                    if let Some(rows) = self.visible_tree_rows() {
-                        let max = rows.len().saturating_sub(1);
-                        if self.tree_selected > max {
-                            self.tree_selected = max;
-                        }
-                        if let Some(row) = rows.get(self.tree_selected) {
-                            // expand if it has children
-                            if self
-                                .call_graph
-                                .edges
-                                .get(&row.index)
-                                .map(|v| !v.is_empty())
-                                .unwrap_or(false)
-                            {
-                                self.expanded.insert(row.index);
-                            }
+                    let (_, rows) = self.compute_tree_view(Some(self.tree_selected..self.tree_selected + 1));
+                    if let Some(row) = rows.first() {
+                        // expand if it has children
+                        if self
+                            .call_graph
+                            .edges
+                            .get(&row.index)
+                            .map(|v| !v.is_empty())
+                            .unwrap_or(false)
+                        {
+                            self.expanded.insert(row.path.clone());
                         }
                     }
                 }
                 KeyCode::Home => {
                     self.tree_selected = 0;
+                    self.tree_scroll = 0;
                 }
                 KeyCode::End => {
-                    if let Some(rows) = self.visible_tree_rows() {
-                        if !rows.is_empty() {
-                            self.tree_selected = rows.len() - 1;
-                        }
+                    let (total, _) = self.compute_tree_view(Some(0..0));
+                    if total > 0 {
+                        self.tree_selected = total - 1;
                     }
                 }
                 KeyCode::PageUp | KeyCode::Char('u') => {
@@ -548,10 +548,11 @@ impl App {
                 KeyCode::PageDown | KeyCode::Char('d') => {
                     if self.inspect_mode {
                         self.wat_cursor = self.wat_cursor.saturating_add(10);
-                    } else if let Some(rows) = self.visible_tree_rows() {
+                    } else {
+                        let (total, _) = self.compute_tree_view(Some(0..0));
                         let step = 10usize;
                         self.tree_selected =
-                            (self.tree_selected + step).min(rows.len().saturating_sub(1));
+                            (self.tree_selected + step).min(total.saturating_sub(1));
                     }
                 }
                 KeyCode::Char('/') => {
@@ -569,16 +570,14 @@ impl App {
                         self.wat_scroll = 0;
                         self.source_scroll = 0;
                         self.wat_cursor = 0;
-                        if let Some(rows) = self.visible_tree_rows() {
-                            if let Some(row) = rows.get(self.tree_selected) {
-                                let idx = row.index;
-                                // Ensure inspect assets (WAT lines, source span, source file) are cached
-                                self.ensure_inspect_assets(idx);
-                                self.wat_lines =
-                                    self.inspect_cache.get(&idx).cloned().unwrap_or_default();
-                            } else {
-                                self.wat_lines.clear();
-                            }
+                        self.wat_cursor = 0;
+                        let (_, rows) = self.compute_tree_view(Some(self.tree_selected..self.tree_selected + 1));
+                        if let Some(row) = rows.first() {
+                            let idx = row.index;
+                            // Ensure inspect assets (WAT lines, source span, source file) are cached
+                            self.ensure_inspect_assets(idx);
+                            self.wat_lines =
+                                self.inspect_cache.get(&idx).cloned().unwrap_or_default();
                         } else {
                             self.wat_lines.clear();
                         }
@@ -626,7 +625,9 @@ impl App {
                                     if let Some(current_func) = self.selected_function() {
                                         self.graph_root = Some(current_func.index);
                                         self.expanded.clear();
+                                        self.expanded.clear();
                                         self.tree_selected = 0;
+                                        self.tree_scroll = 0;
                                         self.graph_mode = true;
                                     }
                                 }
@@ -635,45 +636,24 @@ impl App {
                                 //    that is a child of the currently selected tree node.
                                 
                                 // First, expand the current node so children are visible
-                                if let Some(rows) = self.visible_tree_rows() {
-                                    if let Some(current_row) = rows.get(self.tree_selected) {
-                                        self.expanded.insert(current_row.index);
-                                    }
-                                }
-
-                                // Recompute rows after expansion
-                                if let Some(rows) = self.visible_tree_rows() {
-                                    // We need to find the *new* row index that corresponds to `target_idx`
-                                    // AND is a direct child of the node we just expanded.
-                                    // The currently selected node (parent) is at `self.tree_selected`.
-                                    // Its children will follow immediately after.
+                                let (_, rows) = self.compute_tree_view(Some(self.tree_selected..self.tree_selected + 1));
+                                if let Some(current_row) = rows.first() {
+                                    self.expanded.insert(current_row.path.clone());
                                     
-                                    // Let's find the parent's depth
-                                    if let Some(parent_row) = rows.get(self.tree_selected) {
-                                        let parent_depth = parent_row.depth;
-                                        // Scan forward for the child
-                                        for (i, row) in rows.iter().enumerate().skip(self.tree_selected + 1) {
-                                            if row.depth <= parent_depth {
-                                                // We've gone past the children
-                                                break;
-                                            }
-                                            if row.depth == parent_depth + 1 && row.index == target_idx {
-                                                // Found it!
-                                                self.tree_selected = i;
-                                                
-                                                // 3. Update inspect view to the new function
-                                                self.wat_scroll = 0;
-                                                self.source_scroll = 0;
-                                                self.wat_cursor = 0;
-                                                self.ensure_inspect_assets(target_idx);
-                                                self.wat_lines = self
-                                                    .inspect_cache
-                                                    .get(&target_idx)
-                                                    .cloned()
-                                                    .unwrap_or_default();
-                                                break;
-                                            }
-                                        }
+                                    // Now find the child
+                                    if let Some(child_row_idx) = self.find_visible_child_row(&current_row.path, target_idx) {
+                                        self.tree_selected = child_row_idx;
+                                        
+                                        // 3. Update inspect view to the new function
+                                        self.wat_scroll = 0;
+                                        self.source_scroll = 0;
+                                        self.wat_cursor = 0;
+                                        self.ensure_inspect_assets(target_idx);
+                                        self.wat_lines = self
+                                            .inspect_cache
+                                            .get(&target_idx)
+                                            .cloned()
+                                            .unwrap_or_default();
                                     }
                                 }
                             }
@@ -684,8 +664,14 @@ impl App {
                     if let Some(f) = self.selected_function() {
                         self.graph_root = Some(f.index);
                         self.expanded.clear();
+                        self.expanded.clear();
                         self.tree_selected = 0;
+                        self.tree_scroll = 0;
                         self.graph_mode = true;
+                        
+                        // Clear filter so graph view isn't restricted
+                        self.filter.clear();
+                        self.refresh_indices();
                     }
                 }
             }
@@ -755,6 +741,7 @@ impl App {
             }
             KeyCode::Home => {
                 self.selected = 0;
+                self.main_scroll = 0;
             }
             KeyCode::End => {
                 if !self.indices.is_empty() {
@@ -782,54 +769,90 @@ impl App {
     }
 
     // Compute visible tree rows based on root and expanded nodes.
-    // Returns None if no root is set.
-    fn visible_tree_rows(&self) -> Option<Vec<TreeRow>> {
-        let root = self.graph_root?;
-        let mut rows: Vec<TreeRow> = Vec::new();
-
-        let mut path: Vec<u32> = Vec::new();
-        let mut stack: Vec<(u32, usize, usize)> = Vec::new(); // (node, depth, child_index)
-        stack.push((root, 0, 0));
-        path.push(root);
-
-        // helper to push a row
-        let mut push_row = |idx: u32, depth: usize, is_cycle: bool| {
-            let has_indirect = *self.call_graph.has_indirect.get(&idx).unwrap_or(&false);
-            rows.push(TreeRow {
-                depth,
-                index: idx,
-                is_cycle,
-                has_indirect,
-            });
+    // Returns (total_count, visible_rows)
+    // If window is Some, only allocates and returns rows within that range.
+    // If window is None, returns all rows (careful with large graphs!).
+    fn compute_tree_view(&self, window: Option<std::ops::Range<usize>>) -> (usize, Vec<TreeRow>) {
+        let root = if let Some(r) = self.graph_root {
+            r
+        } else {
+            return (0, Vec::new());
         };
 
+        // If filtering is active, we fall back to generating the filtered list (expensive but necessary for correctness)
+        // We could optimize this further, but the OOM is likely from the raw view.
+        if !self.filter.is_empty() {
+            return self.compute_tree_view_filtered(root, window);
+        }
+
+        let mut rows: Vec<TreeRow> = Vec::new();
+        let mut count = 0;
+
+        let mut path: Vec<(u32, usize)> = Vec::new();
+        let mut stack: Vec<(u32, usize, usize)> = Vec::new(); // (node, depth, child_index)
+        stack.push((root, 0, 0));
+        path.push((root, 0));
+
         while let Some((node, depth, mut child_i)) = stack.pop() {
-            // push this node (when first visiting)
+            // visit this node (when first popping with child_i == 0)
             if child_i == 0 {
-                push_row(node, depth, false);
+                let include = if let Some(ref w) = window {
+                    count >= w.start && count < w.end
+                } else {
+                    true
+                };
+
+                if include {
+                    let has_indirect = *self.call_graph.has_indirect.get(&node).unwrap_or(&false);
+                    rows.push(TreeRow {
+                        depth,
+                        index: node,
+                        is_cycle: false, // We don't track cycle for the root/downward pass easily here without path check, but let's rely on the child check
+                        has_indirect,
+                        path: path.clone(),
+                    });
+                }
+                count += 1;
             }
 
-            // expand children only if expanded contains node
-            if self.expanded.contains(&node) {
+            // expand children only if expanded contains node path
+            if self.expanded.contains(&path) {
                 if let Some(children) = self.call_graph.edges.get(&node) {
-                    // NOTE: this loop only executes at most once per pop/push to walk the tree
                     if child_i < children.len() {
+                        let current_child_idx = child_i;
                         let child = children[child_i];
                         child_i += 1;
-                        // put current back with next child index
+                        // put current back
                         stack.push((node, depth, child_i));
-                        if path.contains(&child) {
+                        
+                        if path.iter().any(|(n, _)| *n == child) {
                             // cycle marker
-                            push_row(child, depth + 1, true);
+                            let include = if let Some(ref w) = window {
+                                count >= w.start && count < w.end
+                            } else {
+                                true
+                            };
+                            if include {
+                                let has_indirect = *self.call_graph.has_indirect.get(&child).unwrap_or(&false);
+                                // temporarily push child to path for the row
+                                path.push((child, current_child_idx));
+                                rows.push(TreeRow {
+                                    depth: depth + 1,
+                                    index: child,
+                                    is_cycle: true,
+                                    has_indirect,
+                                    path: path.clone(),
+                                });
+                                path.pop();
+                            }
+                            count += 1;
                         } else {
                             // descend
-                            path.push(child);
+                            path.push((child, current_child_idx));
                             stack.push((child, depth + 1, 0));
                         }
-                        // continue in next iteration
-                    }
-                    // when exhausted, pop from path
-                    if child_i >= children.len() {
+                    } else {
+                        // done with children
                         let _ = path.pop();
                     }
                 } else {
@@ -837,52 +860,172 @@ impl App {
                     let _ = path.pop();
                 }
             } else {
-                // node collapsed; pop from path
+                // collapsed
                 let _ = path.pop();
             }
         }
 
-        // Apply filter in call graph: keep rows that match or are ancestors of a match
-        if !self.filter.is_empty() {
-            let pat = if self.filter.contains('*') {
-                self.filter.clone()
-            } else {
-                format!("*{}*", self.filter)
-            };
-            // Compute match flags per row
-            let mut match_flags: Vec<bool> = Vec::with_capacity(rows.len());
-            for r in &rows {
-                let is_match =
-                    if let Some(f) = self.module.functions.iter().find(|f| f.index == r.index) {
-                        wasm_poke::function_matches(f, &pat)
+        (count, rows)
+    }
+
+    // Fallback for filtered view: generates all candidates then filters.
+    // This is still memory intensive but required for correct filtering logic.
+    fn compute_tree_view_filtered(&self, root: u32, window: Option<std::ops::Range<usize>>) -> (usize, Vec<TreeRow>) {
+        // 1. Generate ALL rows (virtualized walker logic but collecting all)
+        // We can't use the window yet because we don't know which ones match.
+        let mut all_rows = Vec::new();
+        
+        let mut path: Vec<(u32, usize)> = Vec::new();
+        let mut stack: Vec<(u32, usize, usize)> = Vec::new();
+        stack.push((root, 0, 0));
+        path.push((root, 0));
+
+        // Helper to push
+        let mut push_row = |idx: u32, depth: usize, is_cycle: bool, p: &[(u32, usize)]| {
+             let has_indirect = *self.call_graph.has_indirect.get(&idx).unwrap_or(&false);
+             all_rows.push(TreeRow {
+                 depth,
+                 index: idx,
+                 is_cycle,
+                 has_indirect,
+                 path: p.to_vec(),
+             });
+        };
+
+        while let Some((node, depth, mut child_i)) = stack.pop() {
+            if child_i == 0 {
+                push_row(node, depth, false, &path);
+            }
+
+            if self.expanded.contains(&path) {
+                if let Some(children) = self.call_graph.edges.get(&node) {
+                    if child_i < children.len() {
+                        let current_child_idx = child_i;
+                        let child = children[child_i];
+                        child_i += 1;
+                        stack.push((node, depth, child_i));
+                        if path.iter().any(|(n, _)| *n == child) {
+                            path.push((child, current_child_idx));
+                            push_row(child, depth + 1, true, &path);
+                            path.pop();
+                        } else {
+                            path.push((child, current_child_idx));
+                            stack.push((child, depth + 1, 0));
+                        }
                     } else {
-                        false
-                    };
-                match_flags.push(is_match);
-            }
-            // Mark ancestors of matches
-            let mut keep: Vec<bool> = vec![false; rows.len()];
-            let mut stack_idx: Vec<usize> = Vec::new(); // indices of ancestors by depth
-            for (i, r) in rows.iter().enumerate() {
-                while stack_idx.len() > r.depth {
-                    stack_idx.pop();
-                }
-                if match_flags[i] {
-                    keep[i] = true;
-                    for &anc in &stack_idx {
-                        keep[anc] = true;
+                        let _ = path.pop();
                     }
+                } else {
+                    let _ = path.pop();
                 }
-                stack_idx.push(i);
+            } else {
+                let _ = path.pop();
             }
-            rows = rows
-                .into_iter()
-                .zip(keep.into_iter())
-                .filter_map(|(r, k)| if k { Some(r) } else { None })
-                .collect();
         }
 
-        Some(rows)
+        // 2. Apply filter
+        let pat = if self.filter.contains('*') {
+            self.filter.clone()
+        } else {
+            format!("*{}*", self.filter)
+        };
+        
+        let mut match_flags: Vec<bool> = Vec::with_capacity(all_rows.len());
+        for r in &all_rows {
+            let is_match = if let Some(f) = self.module.functions.iter().find(|f| f.index == r.index) {
+                wasm_poke::function_matches(f, &pat)
+            } else {
+                false
+            };
+            match_flags.push(is_match);
+        }
+
+        let mut keep: Vec<bool> = vec![false; all_rows.len()];
+        let mut stack_idx: Vec<usize> = Vec::new();
+        for (i, r) in all_rows.iter().enumerate() {
+            while stack_idx.len() > r.depth {
+                stack_idx.pop();
+            }
+            if match_flags[i] {
+                keep[i] = true;
+                for &anc in &stack_idx {
+                    keep[anc] = true;
+                }
+            }
+            stack_idx.push(i);
+        }
+
+        let filtered_rows: Vec<TreeRow> = all_rows
+            .into_iter()
+            .zip(keep.into_iter())
+            .filter_map(|(r, k)| if k { Some(r) } else { None })
+            .collect();
+
+        let total = filtered_rows.len();
+        let visible = if let Some(w) = window {
+            filtered_rows.into_iter().skip(w.start).take(w.end - w.start).collect()
+        } else {
+            filtered_rows
+        };
+
+        (total, visible)
+    }
+
+    // Helper to find the row index of a specific child of the current selection.
+    // Used for 'goto' functionality.
+    fn find_visible_child_row(&self, parent_path: &[(u32, usize)], child_index: u32) -> Option<usize> {
+        let root = self.graph_root?;
+        
+        // We walk the tree until we find the node that matches.
+        // This is essentially a search.
+        
+        let mut count = 0;
+        let mut path: Vec<(u32, usize)> = Vec::new();
+        let mut stack: Vec<(u32, usize, usize)> = Vec::new();
+        stack.push((root, 0, 0));
+        path.push((root, 0));
+
+        while let Some((node, depth, mut child_i)) = stack.pop() {
+            if child_i == 0 {
+                // Check if this is the node we are looking for
+                // It must match the child_index AND its parent path must match parent_path
+                if node == child_index && path.len() == parent_path.len() + 1 && path.starts_with(parent_path) {
+                    return Some(count);
+                }
+                count += 1;
+            }
+
+            if self.expanded.contains(&path) {
+                if let Some(children) = self.call_graph.edges.get(&node) {
+                    if child_i < children.len() {
+                        let current_child_idx = child_i;
+                        let child = children[child_i];
+                        child_i += 1;
+                        stack.push((node, depth, child_i));
+                        if path.iter().any(|(n, _)| *n == child) {
+                            // cycle
+                            if child == child_index && path.len() == parent_path.len() && path.starts_with(parent_path) {
+                                // cycle child match?
+                                if path.len() == parent_path.len() {
+                                     return Some(count);
+                                }
+                            }
+                            count += 1;
+                        } else {
+                            path.push((child, current_child_idx));
+                            stack.push((child, depth + 1, 0));
+                        }
+                    } else {
+                        let _ = path.pop();
+                    }
+                } else {
+                    let _ = path.pop();
+                }
+            } else {
+                let _ = path.pop();
+            }
+        }
+        None
     }
 }
 
@@ -1049,11 +1192,12 @@ impl WatRenderer {
         top: usize,
         vis: usize,
         name_map: &std::collections::HashMap<u32, String>,
-    ) -> String {
-        let mut buf = String::new();
+    ) -> Vec<Line<'static>> {
+        let mut output = Vec::new();
         for (i, wl) in lines.iter().enumerate().skip(top).take(vis) {
-            let marker = if i == cursor { ">" } else { " " };
-            let mut rendered = format!("{marker} {}", wl.text);
+            // Use a space to preserve alignment where the caret used to be, 
+            // or just indent slightly.
+            let mut rendered = format!("  {}", wl.text);
             let t = wl.text.trim_start();
             if let Some(rest) = t.strip_prefix("call ") {
                 if let Some((num, _)) = rest.split_once(' ') {
@@ -1070,10 +1214,14 @@ impl WatRenderer {
                     }
                 }
             }
-            rendered.push('\n');
-            buf.push_str(&rendered);
+            
+            let mut line = Line::from(rendered);
+            if i == cursor {
+                line = line.patch_style(Style::default().bg(Color::DarkGray));
+            }
+            output.push(line);
         }
-        buf
+        output
     }
 }
 
@@ -1083,6 +1231,7 @@ struct TreeRow {
     index: u32,
     is_cycle: bool,
     has_indirect: bool,
+    path: Vec<(u32, usize)>,
 }
 
 fn draw_table(f: &mut ratatui::Frame<'_>, area: Rect, app: &mut App) {
@@ -1090,11 +1239,8 @@ fn draw_table(f: &mut ratatui::Frame<'_>, area: Rect, app: &mut App) {
     if app.inspect_mode {
         // Determine current function index based on current mode/selection
         let current_index = if app.graph_mode {
-            if let Some(rows) = app.visible_tree_rows() {
-                rows.get(app.tree_selected).map(|r| r.index)
-            } else {
-                None
-            }
+            let (_, rows) = app.compute_tree_view(Some(app.tree_selected..app.tree_selected + 1));
+            rows.first().map(|r| r.index)
         } else {
             app.selected_function().map(|f| f.index)
         };
@@ -1124,8 +1270,21 @@ fn draw_table(f: &mut ratatui::Frame<'_>, area: Rect, app: &mut App) {
         let cursor = app.wat_cursor.min(total_wat_lines.saturating_sub(1));
 
         // Symbol Name Header
-        let func = &app.module.functions[current_index as usize];
-        let full_name = display_name(func, app.raw_names);
+        let full_name = if current_index < app.module.imported_functions {
+            // It's an import
+            app.name_map
+                .get(&current_index)
+                .cloned()
+                .unwrap_or_else(|| format!("import[{}]", current_index))
+        } else {
+            // It's a defined function
+            let func_idx = (current_index - app.module.imported_functions) as usize;
+            if let Some(func) = app.module.functions.get(func_idx) {
+                display_name(func, app.raw_names)
+            } else {
+                format!("func[{}] (missing info)", current_index)
+            }
+        };
 
         // Calculate required height for the name
         let available_width = area.width.saturating_sub(2);
@@ -1237,7 +1396,7 @@ fn draw_table(f: &mut ratatui::Frame<'_>, area: Rect, app: &mut App) {
             Paragraph::new(wat_text).block(Block::default().borders(Borders::ALL).title(wat_title));
 
         // Source pane: use cached file content and center around mapped line for current instruction
-        let mut source_buf = String::new();
+        let mut source_lines: Vec<Line> = Vec::new();
         let mut target_line_from_instr: Option<u32> = None;
 
         if let Some(wl) = wat_lines.get(cursor) {
@@ -1259,8 +1418,12 @@ fn draw_table(f: &mut ratatui::Frame<'_>, area: Rect, app: &mut App) {
                     let end = (start + visible).min(lines.len());
                     for i in start..end {
                         let ln = i + 1;
-                        let marker = if (ln as u32) == loc.line { ">" } else { " " };
-                        source_buf.push_str(&format!("{marker} {:5} | {}\n", ln, lines[i]));
+                        let content = format!("  {:5} | {}", ln, lines[i]);
+                        let mut line = Line::from(content);
+                        if (ln as u32) == loc.line {
+                            line = line.patch_style(Style::default().bg(Color::DarkGray));
+                        }
+                        source_lines.push(line);
                     }
                 } else if let Ok(src) = std::fs::read_to_string(&loc.file) {
                     let lines: Vec<&str> = src.lines().collect();
@@ -1273,14 +1436,18 @@ fn draw_table(f: &mut ratatui::Frame<'_>, area: Rect, app: &mut App) {
 
                     for i in start..end {
                         let ln = i + 1;
-                        let marker = if (ln as u32) == loc.line { ">" } else { " " };
-                        source_buf.push_str(&format!("{marker} {:5} | {}\n", ln, lines[i]));
+                        let content = format!("  {:5} | {}", ln, lines[i]);
+                        let mut line = Line::from(content);
+                        if (ln as u32) == loc.line {
+                            line = line.patch_style(Style::default().bg(Color::DarkGray));
+                        }
+                        source_lines.push(line);
                     }
                 }
             }
         }
 
-        if source_buf.is_empty() {
+        if source_lines.is_empty() {
             // fallback to function span windowing if available
             if let Some(span) = app.source_span_cache.get(&current_index) {
                 if let Some(src) = app.source_file_cache.get(&span.file) {
@@ -1300,13 +1467,12 @@ fn draw_table(f: &mut ratatui::Frame<'_>, area: Rect, app: &mut App) {
                     let window_end = (window_start + visible).min(end);
                     for i in window_start..window_end {
                         let ln = i + 1;
-                        let marker =
-                            if (ln as u32) == target_line_from_instr.unwrap_or(span.start_line) {
-                                ">"
-                            } else {
-                                " "
-                            };
-                        source_buf.push_str(&format!("{marker} {:5} | {}\n", ln, lines[i]));
+                        let content = format!("  {:5} | {}", ln, lines[i]);
+                        let mut line = Line::from(content);
+                        if (ln as u32) == target_line_from_instr.unwrap_or(span.start_line) {
+                            line = line.patch_style(Style::default().bg(Color::DarkGray));
+                        }
+                        source_lines.push(line);
                     }
                 } else if let Ok(src) = std::fs::read_to_string(&span.file) {
                     let lines: Vec<&str> = src.lines().collect();
@@ -1325,24 +1491,43 @@ fn draw_table(f: &mut ratatui::Frame<'_>, area: Rect, app: &mut App) {
                     let window_end = (window_start + visible).min(end);
                     for i in window_start..window_end {
                         let ln = i + 1;
-                        let marker =
-                            if (ln as u32) == target_line_from_instr.unwrap_or(span.start_line) {
-                                ">"
-                            } else {
-                                " "
-                            };
-                        source_buf.push_str(&format!("{marker} {:5} | {}\n", ln, lines[i]));
+                        let content = format!("  {:5} | {}", ln, lines[i]);
+                        let mut line = Line::from(content);
+                        if (ln as u32) == target_line_from_instr.unwrap_or(span.start_line) {
+                            line = line.patch_style(Style::default().bg(Color::DarkGray));
+                        }
+                        source_lines.push(line);
                     }
                 }
             } else {
-                source_buf.push_str(
-                    "No source mapping available.\nBuild with debug information (DWARF) to enable source pane.\n",
-                );
+                source_lines.push(Line::from("No source mapping available."));
+                source_lines.push(Line::from("Build with debug information (DWARF) to enable source pane."));
             }
         }
 
-        let source_widget = Paragraph::new(source_buf)
-            .block(Block::default().borders(Borders::ALL).title(" Source "));
+        let source_title = if let Some(file) = target_line_from_instr
+            .and_then(|_| wat_lines.get(cursor))
+            .and_then(|wl| {
+                wasm_poke::map_wat_line_to_source_cached(
+                    &app.module,
+                    &app.wasm_bytes,
+                    current_index,
+                    wl,
+                )
+            })
+            .map(|loc| loc.file)
+            .or_else(|| {
+                app.source_span_cache
+                    .get(&current_index)
+                    .map(|sp| sp.file.clone())
+            }) {
+            format!(" Source — {} ", file)
+        } else {
+            " Source ".to_string()
+        };
+
+        let source_widget = Paragraph::new(source_lines)
+            .block(Block::default().borders(Borders::ALL).title(source_title));
 
         // Render panes
         f.render_widget(hex_widget, cols[0]);
@@ -1353,8 +1538,20 @@ fn draw_table(f: &mut ratatui::Frame<'_>, area: Rect, app: &mut App) {
 
     // Graph mode rendering
     if app.graph_mode {
-        // Build visible rows
-        let rows = app.visible_tree_rows().unwrap_or_default();
+        // Calculate visible window
+        // Use -3 (1 header + 2 borders) to maximize visible rows.
+        // We subtract an extra 1 to be safe against Table widget scrolling behavior when full.
+        let height = area.height.saturating_sub(4) as usize; 
+        
+        // Ensure selection is in view
+        if app.tree_selected < app.tree_scroll {
+            app.tree_scroll = app.tree_selected;
+        } else if app.tree_selected >= app.tree_scroll + height {
+            app.tree_scroll = app.tree_selected.saturating_sub(height).saturating_add(1);
+        }
+
+        // Get visible rows from virtualized walker
+        let (total_rows, visible_rows) = app.compute_tree_view(Some(app.tree_scroll..app.tree_scroll + height + 5));
 
         // Header with cumulative size for root
         let header_cells = vec![
@@ -1383,7 +1580,7 @@ fn draw_table(f: &mut ratatui::Frame<'_>, area: Rect, app: &mut App) {
 
         let mut table_rows: Vec<Row> = Vec::new();
 
-        if rows.is_empty() {
+        if total_rows == 0 {
             let row = Row::new(vec![
                 Cell::from("No root selected (press g on a function)"),
                 Cell::from(""),
@@ -1393,7 +1590,7 @@ fn draw_table(f: &mut ratatui::Frame<'_>, area: Rect, app: &mut App) {
             .style(Style::default().fg(Color::DarkGray));
             table_rows.push(row);
         } else {
-            for r in &rows {
+            for r in visible_rows {
                 // render indented name with expand/collapse marker
                 let name = if let Some(f) = app.module.functions.iter().find(|f| f.index == r.index)
                 {
@@ -1408,7 +1605,7 @@ fn draw_table(f: &mut ratatui::Frame<'_>, area: Rect, app: &mut App) {
                     .map(|v| !v.is_empty())
                     .unwrap_or(false)
                 {
-                    if app.expanded.contains(&r.index) {
+                    if app.expanded.contains(&r.path) {
                         "[-] "
                     } else {
                         "[+] "
@@ -1431,6 +1628,7 @@ fn draw_table(f: &mut ratatui::Frame<'_>, area: Rect, app: &mut App) {
                     .unwrap_or(0);
 
                 // cumulative unique size
+                // This is the expensive call we only want to do for visible rows
                 let (cum, _) = unique_cumulative_size(r.index, &app.module, &app.call_graph);
 
                 let cells = vec![
@@ -1461,10 +1659,13 @@ fn draw_table(f: &mut ratatui::Frame<'_>, area: Rect, app: &mut App) {
             .column_spacing(1);
 
         let mut state = TableState::default();
-        if !rows.is_empty() {
-            let clamp = rows.len().saturating_sub(1);
-            let sel = app.tree_selected.min(clamp);
-            state.select(Some(sel));
+        if total_rows > 0 {
+            // Selection is relative to the visible window in the table widget 
+            // if we feed it only the visible rows? 
+            // Actually, Table widget expects selection index to match the row index in the provided vector.
+            // Since we are providing a slice starting from `tree_scroll`, the relative index is:
+            let rel_sel = app.tree_selected.saturating_sub(app.tree_scroll);
+            state.select(Some(rel_sel));
         }
         f.render_stateful_widget(table, area, &mut state);
         return;
@@ -1482,6 +1683,20 @@ fn draw_table(f: &mut ratatui::Frame<'_>, area: Rect, app: &mut App) {
 
     let mut rows: Vec<Row> = Vec::new();
 
+    // Calculate visible window for main view
+    // Use -3 (1 header + 2 borders) to maximize visible rows.
+    // We subtract an extra 1 to be safe against Table widget scrolling behavior when full.
+    let height = area.height.saturating_sub(4) as usize;
+
+    // Ensure selection is in view
+    if app.selected < app.main_scroll {
+        app.main_scroll = app.selected;
+    } else if app.selected >= app.main_scroll + height {
+        app.main_scroll = app.selected.saturating_sub(height).saturating_add(1);
+    }
+
+    let visible_indices = app.indices.iter().skip(app.main_scroll).take(height);
+
     if app.indices.is_empty() {
         let row = Row::new(vec![
             Cell::from(""),
@@ -1493,7 +1708,8 @@ fn draw_table(f: &mut ratatui::Frame<'_>, area: Rect, app: &mut App) {
         .style(Style::default().fg(Color::DarkGray));
         rows.push(row);
     } else {
-        for (rank, idx) in app.indices.iter().enumerate() {
+        for (rank_offset, idx) in visible_indices.enumerate() {
+            let rank = app.main_scroll + rank_offset;
             let f = &app.module.functions[*idx];
             let pct = app.module.percentage(f);
             let name = display_name(f, app.raw_names);
@@ -1528,7 +1744,8 @@ fn draw_table(f: &mut ratatui::Frame<'_>, area: Rect, app: &mut App) {
 
     let mut state = TableState::default();
     if !app.indices.is_empty() {
-        state.select(Some(app.selected));
+        let rel_sel = app.selected.saturating_sub(app.main_scroll);
+        state.select(Some(rel_sel));
     }
     f.render_stateful_widget(table, area, &mut state);
 
@@ -1778,3 +1995,5 @@ fn collect_output_items(
     }
     out
 }
+
+
