@@ -11,7 +11,7 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState, Wrap};
+use ratatui::widgets::{Block, Borders, Cell, List, ListItem, Paragraph, Row, Table, TableState, Wrap};
 use ratatui::Terminal;
 
 use serde::Serialize;
@@ -225,17 +225,18 @@ struct App {
     // scroll offset for Source pane (in lines)
     source_scroll: u16,
 
-    // cached source spans
-    source_span_cache: std::collections::HashMap<u32, wasm_poke::SourceSpan>,
+    // Cache for source spans (function index -> list of source spans)
+    source_span_cache: std::collections::HashMap<u32, Vec<wasm_poke::SourceSpan>>,
+    // Cache for source file content (filename -> content)
+    source_file_cache: std::collections::HashMap<String, String>,
+    // Manual override for source file view (filename)
+    manual_source_file: Option<String>,
 
     // precomputed name map (global index -> best name)
     name_map: std::collections::HashMap<u32, String>,
 
-    // caches for inspect mode data and source file contents
+    // caches for inspect mode data
     inspect_cache: std::collections::HashMap<u32, Vec<WatLine>>,
-
-    source_file_cache: std::collections::HashMap<String, String>,
-    // removed pre-sorted cache; we compute sorted indices in refresh_indices
 
     // Help popup state
     help_popup: Option<String>,
@@ -278,6 +279,8 @@ impl App {
             wat_scroll: 0,
             source_scroll: 0,
             source_span_cache: std::collections::HashMap::new(),
+            source_file_cache: std::collections::HashMap::new(),
+            manual_source_file: None,
             name_map: module
                 .functions
                 .iter()
@@ -287,7 +290,7 @@ impl App {
             // initialize caches
             inspect_cache: std::collections::HashMap::new(),
 
-            source_file_cache: std::collections::HashMap::new(),
+
             help_popup: None,
             tree_scroll: 0,
             main_scroll: 0,
@@ -402,10 +405,11 @@ impl App {
     }
 
     fn ensure_inspect_assets(&mut self, func_index: u32) {
-        // Cache source span once
+        // Cache source spans once
         if !self.source_span_cache.contains_key(&func_index) {
-            if let Some(sp) = wasm_poke::function_source_span(&self.wasm_bytes, func_index) {
-                self.source_span_cache.insert(func_index, sp.clone());
+            let spans = wasm_poke::function_source_span(&self.wasm_bytes, func_index);
+            if !spans.is_empty() {
+                self.source_span_cache.insert(func_index, spans);
             }
         }
 
@@ -416,13 +420,24 @@ impl App {
             self.inspect_cache.insert(func_index, lines);
         }
 
-        // Cache source file contents once if we have a span
-        if let Some(span) = self.source_span_cache.get(&func_index) {
-            if !self.source_file_cache.contains_key(&span.file) {
-                if let Ok(src) = std::fs::read_to_string(&span.file) {
-                    self.source_file_cache.insert(span.file.clone(), src);
+        // Cache source file contents for all spans
+        if let Some(spans) = self.source_span_cache.get(&func_index) {
+            for span in spans {
+                if !self.source_file_cache.contains_key(&span.file) {
+                    if let Ok(src) = std::fs::read_to_string(&span.file) {
+                        self.source_file_cache.insert(span.file.clone(), src);
+                    }
                 }
             }
+        }
+    }
+
+    fn current_inspect_function(&self) -> Option<u32> {
+        if self.graph_mode {
+            let (_, rows) = self.compute_tree_view(Some(self.tree_selected..self.tree_selected + 1));
+            rows.first().map(|r| r.index)
+        } else {
+            self.selected_function().map(|f| f.index)
         }
     }
 
@@ -430,6 +445,38 @@ impl App {
         // Returns true to request exit
         if key.kind != KeyEventKind::Press {
             return false;
+        }
+
+        if self.inspect_mode {
+            match key.code {
+                KeyCode::Char('[') => {
+                    if let Some(idx) = self.current_inspect_function() {
+                        if let Some(spans) = self.source_span_cache.get(&idx) {
+                            if !spans.is_empty() {
+                                let current = self.manual_source_file.as_ref().or_else(|| spans.first().map(|s| &s.file));
+                                let pos = spans.iter().position(|s| Some(&s.file) == current).unwrap_or(0);
+                                let new_pos = if pos == 0 { spans.len() - 1 } else { pos - 1 };
+                                self.manual_source_file = Some(spans[new_pos].file.clone());
+                            }
+                        }
+                    }
+                    return false;
+                }
+                KeyCode::Char(']') => {
+                    if let Some(idx) = self.current_inspect_function() {
+                        if let Some(spans) = self.source_span_cache.get(&idx) {
+                            if !spans.is_empty() {
+                                let current = self.manual_source_file.as_ref().or_else(|| spans.first().map(|s| &s.file));
+                                let pos = spans.iter().position(|s| Some(&s.file) == current).unwrap_or(0);
+                                let new_pos = (pos + 1) % spans.len();
+                                self.manual_source_file = Some(spans[new_pos].file.clone());
+                            }
+                        }
+                    }
+                    return false;
+                }
+                _ => {}
+            }
         }
 
         if self.in_search {
@@ -1238,12 +1285,7 @@ fn draw_table(f: &mut ratatui::Frame<'_>, area: Rect, app: &mut App) {
     // Inspect mode rendering (side-by-side hex and WAT)
     if app.inspect_mode {
         // Determine current function index based on current mode/selection
-        let current_index = if app.graph_mode {
-            let (_, rows) = app.compute_tree_view(Some(app.tree_selected..app.tree_selected + 1));
-            rows.first().map(|r| r.index)
-        } else {
-            app.selected_function().map(|f| f.index)
-        };
+        let current_index = app.current_inspect_function();
 
         let current_index = if let Some(ix) = current_index {
             ix
@@ -1291,9 +1333,9 @@ fn draw_table(f: &mut ratatui::Frame<'_>, area: Rect, app: &mut App) {
         let name_len = full_name.len() as u16;
         // integer ceil div
         let name_lines = (name_len + available_width.saturating_sub(1)) / available_width.max(1);
-        // Clamp to a reasonable maximum to avoid taking up the whole screen if something goes wrong, 
+        // Clamp to a reasonable maximum to avoid taking up the whole screen if something goes wrong,
         // but 10 lines is plenty for a name.
-        let header_height = (name_lines + 2).min(10); 
+        let header_height = (name_lines + 2).min(10);
 
         let chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -1387,152 +1429,136 @@ fn draw_table(f: &mut ratatui::Frame<'_>, area: Rect, app: &mut App) {
             &app.name_map,
         );
 
-        let wat_title = if let Some(ref sp) = app.source_span_cache.get(&current_index) {
-            format!(" WAT — {}:{} ", sp.file, sp.start_line)
+        let wat_title = if let Some(spans) = app.source_span_cache.get(&current_index) {
+             if let Some(first) = spans.first() {
+                 format!(" WAT — {}:{} ", first.file, first.start_line)
+             } else {
+                 " WAT ".to_string()
+             }
         } else {
             " WAT ".to_string()
         };
         let wat_widget =
             Paragraph::new(wat_text).block(Block::default().borders(Borders::ALL).title(wat_title));
 
-        // Source pane: use cached file content and center around mapped line for current instruction
-        let mut source_lines: Vec<Line> = Vec::new();
-        let mut target_line_from_instr: Option<u32> = None;
+        // Source pane split: File List (top) and Content (bottom)
+        let source_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(6), // Title + 4 files + border
+                Constraint::Min(0),
+            ])
+            .split(cols[2]);
 
-        if let Some(wl) = wat_lines.get(cursor) {
-            if let Some(loc) = wasm_poke::map_wat_line_to_source_cached(
-                &app.module,
-                &app.wasm_bytes,
-                current_index,
-                wl,
-            ) {
-                target_line_from_instr = Some(loc.line);
-                // try to use cached file content
-                if let Some(src) = app.source_file_cache.get(&loc.file) {
-                    let lines: Vec<&str> = src.lines().collect();
+        // Source pane logic
+        let spans = app.source_span_cache.get(&current_index).map(|v| v.as_slice()).unwrap_or(&[]);
 
-                    let visible = cols[2].height.saturating_sub(2) as usize;
-                    let target = (loc.line as usize).max(1);
-                    let half = visible / 2;
-                    let start = target.saturating_sub(1).saturating_sub(half);
-                    let end = (start + visible).min(lines.len());
-                    for i in start..end {
-                        let ln = i + 1;
-                        let content = format!("  {:5} | {}", ln, lines[i]);
-                        let mut line = Line::from(content);
-                        if (ln as u32) == loc.line {
-                            line = line.patch_style(Style::default().bg(Color::DarkGray));
-                        }
-                        source_lines.push(line);
-                    }
-                } else if let Ok(src) = std::fs::read_to_string(&loc.file) {
-                    let lines: Vec<&str> = src.lines().collect();
+        // Determine active file
+        // 1. Manual override
+        // 2. Map from current instruction
+        // 3. First in list (dominant)
+        let mut active_file = app.manual_source_file.clone();
+        let mut target_line = None;
 
-                    let visible = cols[2].height.saturating_sub(2) as usize;
-                    let target = (loc.line as usize).max(1);
-                    let half = visible / 2;
-                    let start = target.saturating_sub(1).saturating_sub(half);
-                    let end = (start + visible).min(lines.len());
-
-                    for i in start..end {
-                        let ln = i + 1;
-                        let content = format!("  {:5} | {}", ln, lines[i]);
-                        let mut line = Line::from(content);
-                        if (ln as u32) == loc.line {
-                            line = line.patch_style(Style::default().bg(Color::DarkGray));
-                        }
-                        source_lines.push(line);
-                    }
-                }
-            }
-        }
-
-        if source_lines.is_empty() {
-            // fallback to function span windowing if available
-            if let Some(span) = app.source_span_cache.get(&current_index) {
-                if let Some(src) = app.source_file_cache.get(&span.file) {
-                    let lines: Vec<&str> = src.lines().collect();
-                    let start = (span.start_line as usize).saturating_sub(1);
-                    let end = (span.end_line as usize).min(lines.len());
-                    let visible = cols[2].height.saturating_sub(2) as usize;
-                    let center_line = target_line_from_instr.unwrap_or(span.start_line) as usize;
-                    let center_idx = center_line.saturating_sub(1);
-                    let rel_idx = center_idx.saturating_sub(start);
-                    let half = visible / 2;
-                    let window_start = {
-                        let desired_center = start.saturating_add(rel_idx.saturating_sub(half));
-                        let max_start = end.saturating_sub(visible);
-                        desired_center.min(max_start).max(start)
-                    };
-                    let window_end = (window_start + visible).min(end);
-                    for i in window_start..window_end {
-                        let ln = i + 1;
-                        let content = format!("  {:5} | {}", ln, lines[i]);
-                        let mut line = Line::from(content);
-                        if (ln as u32) == target_line_from_instr.unwrap_or(span.start_line) {
-                            line = line.patch_style(Style::default().bg(Color::DarkGray));
-                        }
-                        source_lines.push(line);
-                    }
-                } else if let Ok(src) = std::fs::read_to_string(&span.file) {
-                    let lines: Vec<&str> = src.lines().collect();
-                    let start = (span.start_line as usize).saturating_sub(1);
-                    let end = (span.end_line as usize).min(lines.len());
-                    let visible = cols[2].height.saturating_sub(2) as usize;
-                    let center_line = target_line_from_instr.unwrap_or(span.start_line) as usize;
-                    let center_idx = center_line.saturating_sub(1);
-                    let rel_idx = center_idx.saturating_sub(start);
-                    let half = visible / 2;
-                    let window_start = {
-                        let desired_center = start.saturating_add(rel_idx.saturating_sub(half));
-                        let max_start = end.saturating_sub(visible);
-                        desired_center.min(max_start).max(start)
-                    };
-                    let window_end = (window_start + visible).min(end);
-                    for i in window_start..window_end {
-                        let ln = i + 1;
-                        let content = format!("  {:5} | {}", ln, lines[i]);
-                        let mut line = Line::from(content);
-                        if (ln as u32) == target_line_from_instr.unwrap_or(span.start_line) {
-                            line = line.patch_style(Style::default().bg(Color::DarkGray));
-                        }
-                        source_lines.push(line);
-                    }
-                }
-            } else {
-                source_lines.push(Line::from("No source mapping available."));
-                source_lines.push(Line::from("Build with debug information (DWARF) to enable source pane."));
-            }
-        }
-
-        let source_title = if let Some(file) = target_line_from_instr
-            .and_then(|_| wat_lines.get(cursor))
-            .and_then(|wl| {
-                wasm_poke::map_wat_line_to_source_cached(
+        if active_file.is_none() {
+             if let Some(wl) = wat_lines.get(cursor) {
+                if let Some(loc) = wasm_poke::map_wat_line_to_source_cached(
                     &app.module,
                     &app.wasm_bytes,
                     current_index,
                     wl,
-                )
-            })
-            .map(|loc| loc.file)
-            .or_else(|| {
-                app.source_span_cache
-                    .get(&current_index)
-                    .map(|sp| sp.file.clone())
-            }) {
-            format!(" Source — {} ", file)
-        } else {
-            " Source ".to_string()
-        };
+                ) {
+                    active_file = Some(loc.file.clone());
+                    target_line = Some(loc.line);
+                }
+            }
+        }
 
-        let source_widget = Paragraph::new(source_lines)
-            .block(Block::default().borders(Borders::ALL).title(source_title));
+        if active_file.is_none() {
+            active_file = spans.first().map(|s| s.file.clone());
+        }
+
+        // If we have an active file but no target line yet, try to find one from the span or instruction
+        if target_line.is_none() {
+             if let Some(wl) = wat_lines.get(cursor) {
+                if let Some(loc) = wasm_poke::map_wat_line_to_source_cached(
+                    &app.module,
+                    &app.wasm_bytes,
+                    current_index,
+                    wl,
+                ) {
+                    if Some(&loc.file) == active_file.as_ref() {
+                        target_line = Some(loc.line);
+                    }
+                }
+            }
+        }
+
+        // Fallback target line to start of file/span if still unknown
+        if target_line.is_none() {
+            if let Some(f) = &active_file {
+                if let Some(s) = spans.iter().find(|s| &s.file == f) {
+                    target_line = Some(s.start_line);
+                }
+            }
+        }
+
+        // Render File List
+        let mut file_list_items = Vec::new();
+        if spans.is_empty() {
+            file_list_items.push(ListItem::new(Line::from("No source files found")));
+        } else {
+            for s in spans {
+                let is_active = Some(&s.file) == active_file.as_ref();
+                let style = if is_active {
+                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::Gray)
+                };
+                let prefix = if is_active { ">> " } else { "   " };
+                file_list_items.push(ListItem::new(Line::from(format!("{}{}", prefix, s.file)).style(style)));
+            }
+        }
+
+        let file_list = List::new(file_list_items)
+            .block(Block::default().borders(Borders::ALL).title(" Source Files ([ / ]) "));
+
+        // Render Content
+        let mut source_lines: Vec<Line> = Vec::new();
+        if let Some(f) = &active_file {
+            if let Some(src) = app.source_file_cache.get(f) {
+                let lines: Vec<&str> = src.lines().collect();
+                let visible = source_chunks[1].height.saturating_sub(2) as usize;
+                let target = target_line.unwrap_or(1) as usize;
+                let half = visible / 2;
+                let start = target.saturating_sub(1).saturating_sub(half);
+                let end = (start + visible).min(lines.len());
+
+                for i in start..end {
+                    let ln = i + 1;
+                    let content = format!("  {:5} | {}", ln, lines[i]);
+                    let mut line = Line::from(content);
+                    if Some(ln as u32) == target_line {
+                        line = line.patch_style(Style::default().bg(Color::DarkGray));
+                    }
+                    source_lines.push(line);
+                }
+            } else {
+                 source_lines.push(Line::from(format!("Could not read file: {}", f)));
+            }
+        } else {
+            source_lines.push(Line::from("No source file selected."));
+            source_lines.push(Line::from("Build with debug information (DWARF) to enable source pane."));
+        }
+
+        let source_content = Paragraph::new(source_lines)
+            .block(Block::default().borders(Borders::ALL).title(format!(" Source: {} ", active_file.as_deref().unwrap_or("none"))));
 
         // Render panes
         f.render_widget(hex_widget, cols[0]);
         f.render_widget(wat_widget, cols[1]);
-        f.render_widget(source_widget, cols[2]);
+        f.render_widget(file_list, source_chunks[0]);
+        f.render_widget(source_content, source_chunks[1]);
         return;
     }
 

@@ -682,14 +682,29 @@ pub fn map_instr_to_source(
 /// Compute the best-effort source span (file and start/end lines) for an entire function by
 /// probing DWARF mappings across the function body. Returns None if no mapping is found.
 /// Picks the dominant file by count and min/max line range.
-pub fn function_source_span(wasm_bytes: &[u8], func_index: u32) -> Option<SourceSpan> {
+/// Compute the source spans (file and start/end lines) for an entire function by
+/// probing DWARF mappings across the function body. Returns a list of spans sorted by
+/// "dominance" (instruction count), so the first element is the main file.
+pub fn function_source_span(wasm_bytes: &[u8], func_index: u32) -> Vec<SourceSpan> {
     use std::collections::HashMap as Map;
 
     // Use global DWARF context (Mutex-backed) for all spans.
     let dc = if let Some(m) = DWARF_CONTEXT.get() {
-        m.lock().ok()?
+        if let Ok(g) = m.lock() {
+            g
+        } else {
+            return Vec::new();
+        }
     } else {
-        init_dwarf_context(wasm_bytes)?.lock().ok()?
+        if let Some(m) = init_dwarf_context(wasm_bytes) {
+            if let Ok(g) = m.lock() {
+                g
+            } else {
+                return Vec::new();
+            }
+        } else {
+            return Vec::new();
+        }
     };
 
     // Locate function body start/end
@@ -699,20 +714,28 @@ pub fn function_source_span(wasm_bytes: &[u8], func_index: u32) -> Option<Source
     let mut func_body_end: Option<usize> = None;
 
     for payload in wasmparser::Parser::new(0).parse_all(wasm_bytes) {
-        let payload = payload.ok()?;
+        let payload = if let Ok(p) = payload { p } else { return Vec::new() };
         match payload {
             wasmparser::Payload::ImportSection(s) => {
                 for import in s {
-                    let import = import.ok()?;
+                    let import = if let Ok(i) = import { i } else { return Vec::new() };
                     if matches!(import.ty, wasmparser::TypeRef::Func(_)) {
-                        imported_funcs = imported_funcs.checked_add(1)?;
+                        if let Some(n) = imported_funcs.checked_add(1) {
+                            imported_funcs = n;
+                        } else {
+                            return Vec::new();
+                        }
                     }
                 }
             }
             wasmparser::Payload::CodeSectionEntry(body) => {
                 let r = body.get_binary_reader();
                 let range = r.range();
-                let this_global = imported_funcs.checked_add(defined_funcs_seen)?;
+                let this_global = if let Some(n) = imported_funcs.checked_add(defined_funcs_seen) {
+                    n
+                } else {
+                    return Vec::new();
+                };
                 if this_global == func_index {
                     func_body_start = Some(range.start);
                     func_body_end = Some(range.end);
@@ -724,11 +747,11 @@ pub fn function_source_span(wasm_bytes: &[u8], func_index: u32) -> Option<Source
         }
     }
 
-    let start = func_body_start?;
-    let end = func_body_end?;
+    let start = if let Some(s) = func_body_start { s } else { return Vec::new() };
+    let end = if let Some(e) = func_body_end { e } else { return Vec::new() };
     let body_len = end.saturating_sub(start);
     if body_len == 0 {
-        return None;
+        return Vec::new();
     }
 
     // Probe offsets across the body to gather source lines grouped by file
@@ -774,20 +797,23 @@ pub fn function_source_span(wasm_bytes: &[u8], func_index: u32) -> Option<Source
     }
 
     if file_stats.is_empty() {
-        return None;
+        return Vec::new();
     }
 
-    // Choose the dominant file by count
-    let (file, (_count, min_line, min_col, max_line, max_col)) =
-        file_stats.into_iter().max_by_key(|(_, v)| v.0).unwrap();
+    // Convert to Vec and sort by count descending
+    let mut stats_vec: Vec<(String, (u32, u32, u32, u32, u32))> = file_stats.into_iter().collect();
+    stats_vec.sort_by(|a, b| b.1 .0.cmp(&a.1 .0));
 
-    Some(SourceSpan {
-        file,
-        start_line: min_line,
-        start_column: min_col,
-        end_line: max_line,
-        end_column: max_col,
-    })
+    stats_vec
+        .into_iter()
+        .map(|(file, (_count, min_line, min_col, max_line, max_col))| SourceSpan {
+            file,
+            start_line: min_line,
+            start_column: min_col,
+            end_line: max_line,
+            end_column: max_col,
+        })
+        .collect()
 }
 
 /// Return the raw function body bytes for a given global function index, if available.
