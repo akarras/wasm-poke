@@ -1504,11 +1504,42 @@ fn draw_table(f: &mut ratatui::Frame<'_>, area: Rect, app: &mut App) {
         // Render File List
         let mut file_list_items = Vec::new();
         let mut active_idx = None;
-        if spans.is_empty() {
-            file_list_items.push(ListItem::new(Line::from("No source files found")));
+        
+        // Filter spans if we have a specific target from the instruction
+        let visible_spans: Vec<&wasm_poke::SourceSpan> = if let Some(loc) = &target_src_loc {
+            spans.iter().filter(|s| s.file == loc.file).collect()
         } else {
-            for (i, s) in spans.iter().enumerate() {
+            spans.iter().collect()
+        };
+
+        if visible_spans.is_empty() {
+            // Fallback to showing all if filtering resulted in nothing (shouldn't happen if logic is correct)
+            // or if spans was empty to begin with.
+            if spans.is_empty() {
+                file_list_items.push(ListItem::new(Line::from("No source files found")));
+            } else {
+                 // If we filtered out everything (e.g. mapping points to file not in span list?), show all
+                 for (i, s) in spans.iter().enumerate() {
+                    let is_active = Some(&s.file) == active_file.as_ref();
+                    if is_active {
+                        active_idx = Some(i);
+                    }
+                    let style = if is_active {
+                        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(Color::Gray)
+                    };
+                    let prefix = if is_active { ">> " } else { "   " };
+                    file_list_items.push(ListItem::new(Line::from(format!("{}{}", prefix, s.file)).style(style)));
+                }
+            }
+        } else {
+            for (i, s) in visible_spans.iter().enumerate() {
                 let is_active = Some(&s.file) == active_file.as_ref();
+                // Since we are filtering, the active file should be one of these, likely the only one.
+                // But we still check to set the style.
+                // Note: active_idx needs to match the index in the *displayed* list for the widget state?
+                // Actually ListState index corresponds to the index in the items vector.
                 if is_active {
                     active_idx = Some(i);
                 }
@@ -1517,7 +1548,6 @@ fn draw_table(f: &mut ratatui::Frame<'_>, area: Rect, app: &mut App) {
                 } else {
                     Style::default().fg(Color::Gray)
                 };
-                // We rely on ListState for scrolling, but we can still keep the prefix for visual clarity
                 let prefix = if is_active { ">> " } else { "   " };
                 file_list_items.push(ListItem::new(Line::from(format!("{}{}", prefix, s.file)).style(style)));
             }
