@@ -11,7 +11,7 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Cell, List, ListItem, Paragraph, Row, Table, TableState, Wrap};
+use ratatui::widgets::{Block, Borders, Cell, List, ListItem, ListState, Paragraph, Row, Table, TableState, Wrap};
 use ratatui::Terminal;
 
 use serde::Serialize;
@@ -246,6 +246,9 @@ struct App {
 
     // Scroll offset for the main list view
     main_scroll: usize,
+
+    // State for the source file list
+    source_list_state: ListState,
 }
 
 impl App {
@@ -294,6 +297,7 @@ impl App {
             help_popup: None,
             tree_scroll: 0,
             main_scroll: 0,
+            source_list_state: ListState::default(),
         };
 
         app.refresh_indices();
@@ -415,8 +419,19 @@ impl App {
 
         // Cache disassembled WAT lines once
         if !self.inspect_cache.contains_key(&func_index) {
-            let lines =
+            let mut lines =
                 disassemble_function_wat_lines(&self.wasm_bytes, func_index).unwrap_or_default();
+            
+            // Pre-compute source mappings for all lines
+            for line in &mut lines {
+                line.src = wasm_poke::map_instr_to_source_fast(
+                    &self.module,
+                    &self.wasm_bytes,
+                    func_index,
+                    line.offset,
+                );
+            }
+
             self.inspect_cache.insert(func_index, lines);
         }
 
@@ -1239,6 +1254,7 @@ impl WatRenderer {
         top: usize,
         vis: usize,
         name_map: &std::collections::HashMap<u32, String>,
+        highlight_target: Option<&wasm_poke::SourceLocation>,
     ) -> Vec<Line<'static>> {
         let mut output = Vec::new();
         for (i, wl) in lines.iter().enumerate().skip(top).take(vis) {
@@ -1265,6 +1281,13 @@ impl WatRenderer {
             let mut line = Line::from(rendered);
             if i == cursor {
                 line = line.patch_style(Style::default().bg(Color::DarkGray));
+            } else if let Some(target) = highlight_target {
+                // Secondary highlight if source matches
+                if let Some(src) = &wl.src {
+                    if src.file == target.file && src.line == target.line {
+                        line = line.patch_style(Style::default().bg(Color::Rgb(50, 50, 50)));
+                    }
+                }
             }
             output.push(line);
         }
@@ -1421,13 +1444,6 @@ fn draw_table(f: &mut ratatui::Frame<'_>, area: Rect, app: &mut App) {
         let desired_wat_top = cursor.saturating_sub(visible_wat_lines / 2);
         let max_wat_top = total_wat_lines.saturating_sub(visible_wat_lines);
         let wat_top = desired_wat_top.min(max_wat_top);
-        let wat_text = WatRenderer::render_window(
-            &wat_lines,
-            cursor,
-            wat_top,
-            visible_wat_lines,
-            &app.name_map,
-        );
 
         let wat_title = if let Some(spans) = app.source_span_cache.get(&current_index) {
              if let Some(first) = spans.first() {
@@ -1438,8 +1454,6 @@ fn draw_table(f: &mut ratatui::Frame<'_>, area: Rect, app: &mut App) {
         } else {
             " WAT ".to_string()
         };
-        let wat_widget =
-            Paragraph::new(wat_text).block(Block::default().borders(Borders::ALL).title(wat_title));
 
         // Source pane split: File List (top) and Content (bottom)
         let source_chunks = Layout::default()
@@ -1459,16 +1473,16 @@ fn draw_table(f: &mut ratatui::Frame<'_>, area: Rect, app: &mut App) {
         // 3. First in list (dominant)
         let mut active_file = app.manual_source_file.clone();
         let mut target_line = None;
+        let mut target_src_loc: Option<wasm_poke::SourceLocation> = None;
 
-        if active_file.is_none() {
-             if let Some(wl) = wat_lines.get(cursor) {
-                if let Some(loc) = wasm_poke::map_wat_line_to_source_cached(
-                    &app.module,
-                    &app.wasm_bytes,
-                    current_index,
-                    wl,
-                ) {
+        // Try to get mapping from current cursor line
+        if let Some(wl) = wat_lines.get(cursor) {
+            if let Some(loc) = &wl.src {
+                target_src_loc = Some(loc.clone());
+                if active_file.is_none() {
                     active_file = Some(loc.file.clone());
+                }
+                if Some(&loc.file) == active_file.as_ref() {
                     target_line = Some(loc.line);
                 }
             }
@@ -1476,22 +1490,6 @@ fn draw_table(f: &mut ratatui::Frame<'_>, area: Rect, app: &mut App) {
 
         if active_file.is_none() {
             active_file = spans.first().map(|s| s.file.clone());
-        }
-
-        // If we have an active file but no target line yet, try to find one from the span or instruction
-        if target_line.is_none() {
-             if let Some(wl) = wat_lines.get(cursor) {
-                if let Some(loc) = wasm_poke::map_wat_line_to_source_cached(
-                    &app.module,
-                    &app.wasm_bytes,
-                    current_index,
-                    wl,
-                ) {
-                    if Some(&loc.file) == active_file.as_ref() {
-                        target_line = Some(loc.line);
-                    }
-                }
-            }
         }
 
         // Fallback target line to start of file/span if still unknown
@@ -1505,19 +1503,31 @@ fn draw_table(f: &mut ratatui::Frame<'_>, area: Rect, app: &mut App) {
 
         // Render File List
         let mut file_list_items = Vec::new();
+        let mut active_idx = None;
         if spans.is_empty() {
             file_list_items.push(ListItem::new(Line::from("No source files found")));
         } else {
-            for s in spans {
+            for (i, s) in spans.iter().enumerate() {
                 let is_active = Some(&s.file) == active_file.as_ref();
+                if is_active {
+                    active_idx = Some(i);
+                }
                 let style = if is_active {
                     Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
                 } else {
                     Style::default().fg(Color::Gray)
                 };
+                // We rely on ListState for scrolling, but we can still keep the prefix for visual clarity
                 let prefix = if is_active { ">> " } else { "   " };
                 file_list_items.push(ListItem::new(Line::from(format!("{}{}", prefix, s.file)).style(style)));
             }
+        }
+        
+        // Update selection state for auto-scrolling
+        if active_idx.is_some() {
+            app.source_list_state.select(active_idx);
+        } else {
+            app.source_list_state.select(None);
         }
 
         let file_list = List::new(file_list_items)
@@ -1556,8 +1566,25 @@ fn draw_table(f: &mut ratatui::Frame<'_>, area: Rect, app: &mut App) {
 
         // Render panes
         f.render_widget(hex_widget, cols[0]);
+        
+        // Custom WAT rendering to highlight ranges
+        // We need to pass the target_src_loc to the renderer or handle it here.
+        // Since WatRenderer::render_window is simple, let's update it or inline the logic.
+        // For now, let's update WatRenderer to accept an optional highlight target.
+        let wat_text = WatRenderer::render_window(
+            &wat_lines,
+            cursor,
+            wat_top,
+            visible_wat_lines,
+            &app.name_map,
+            target_src_loc.as_ref(),
+        );
+        
+        let wat_widget =
+            Paragraph::new(wat_text).block(Block::default().borders(Borders::ALL).title(wat_title));
+
         f.render_widget(wat_widget, cols[1]);
-        f.render_widget(file_list, source_chunks[0]);
+        f.render_stateful_widget(file_list, source_chunks[0], &mut app.source_list_state);
         f.render_widget(source_content, source_chunks[1]);
         return;
     }

@@ -583,17 +583,25 @@ pub fn map_instr_to_source_fast(
 
     let address = (base + body_offset) as u64;
 
-    let mut loc = dc.ctx.find_location(address).ok().flatten();
-    if loc.is_none() {
-        for delta in 0..4096usize {
-            let probe_addr = (base + delta) as u64;
-            if let Ok(found) = dc.ctx.find_location(probe_addr) {
-                if found.is_some() {
-                    loc = found;
-                    break;
-                }
+    // Use find_frames to handle inlined functions correctly (returns the most specific frame first)
+    if let Ok(mut frames) = dc.ctx.find_frames(address).skip_all_loads() {
+        while let Ok(Some(frame)) = frames.next() {
+            if let (Some(file), Some(line)) = (frame.location.as_ref().and_then(|l| l.file), frame.location.as_ref().and_then(|l| l.line)) {
+                 return Some(SourceLocation {
+                     file: file.to_string(),
+                     line,
+                     column: frame.location.as_ref().and_then(|l| l.column).unwrap_or(0),
+                 });
             }
         }
+    }
+    
+    // Fallback to find_location if frames failed or empty (though find_frames should cover it)
+    let mut loc = dc.ctx.find_location(address).ok().flatten();
+    
+    if loc.is_none() {
+         // Try next byte just in case
+         loc = dc.ctx.find_location(address + 1).ok().flatten();
     }
 
     let loc = loc?;
@@ -682,8 +690,8 @@ pub fn map_instr_to_source(
 /// Compute the best-effort source span (file and start/end lines) for an entire function by
 /// probing DWARF mappings across the function body. Returns None if no mapping is found.
 /// Picks the dominant file by count and min/max line range.
-/// Compute the source spans (file and start/end lines) for an entire function by
-/// probing DWARF mappings across the function body. Returns a list of spans sorted by
+/// Compute the best-effort source span (file and start/end lines) for an entire function by
+/// probing DWARF mappings for each instruction in the function body. Returns a list of spans sorted by
 /// "dominance" (instruction count), so the first element is the main file.
 pub fn function_source_span(wasm_bytes: &[u8], func_index: u32) -> Vec<SourceSpan> {
     use std::collections::HashMap as Map;
@@ -707,11 +715,12 @@ pub fn function_source_span(wasm_bytes: &[u8], func_index: u32) -> Vec<SourceSpa
         }
     };
 
-    // Locate function body start/end
+    // Locate function body and process it
     let mut imported_funcs: u32 = 0;
     let mut defined_funcs_seen: u32 = 0;
-    let mut func_body_start: Option<usize> = None;
-    let mut func_body_end: Option<usize> = None;
+    
+    // Map: file -> (count, min_line, min_col, max_line, max_col)
+    let mut file_stats: Map<String, (u32, u32, u32, u32, u32)> = Map::new();
 
     for payload in wasmparser::Parser::new(0).parse_all(wasm_bytes) {
         let payload = if let Ok(p) = payload { p } else { return Vec::new() };
@@ -729,71 +738,83 @@ pub fn function_source_span(wasm_bytes: &[u8], func_index: u32) -> Vec<SourceSpa
                 }
             }
             wasmparser::Payload::CodeSectionEntry(body) => {
-                let r = body.get_binary_reader();
-                let range = r.range();
                 let this_global = if let Some(n) = imported_funcs.checked_add(defined_funcs_seen) {
                     n
                 } else {
                     return Vec::new();
                 };
+                
                 if this_global == func_index {
-                    func_body_start = Some(range.start);
-                    func_body_end = Some(range.end);
+                    // Found the function, process it immediately
+                    let r = body.get_binary_reader();
+                    let range = r.range();
+                    
+                    // Normalize to the module-relative "address space" used by addr2line context.
+                    let base = range.start.saturating_sub(dc.code_section_start);
+                    
+                    let mut ops = if let Ok(o) = body.get_operators_reader() { o } else { return Vec::new() };
+                    
+                    while !ops.eof() {
+                        let offset = ops.original_position();
+                        let address = (offset.saturating_sub(dc.code_section_start)) as u64;
+                        
+                        // Use find_frames here too for consistency? 
+                        // Or just find_location since we just want the file.
+                        // find_frames is safer for inlined code.
+                        if let Ok(mut frames) = dc.ctx.find_frames(address).skip_all_loads() {
+                             while let Ok(Some(frame)) = frames.next() {
+                                if let (Some(file), Some(line)) = (frame.location.as_ref().and_then(|l| l.file), frame.location.as_ref().and_then(|l| l.line)) {
+                                    let file_str = file.to_string();
+                                    let entry = file_stats.entry(file_str).or_insert((
+                                        0,
+                                        line,
+                                        frame.location.as_ref().and_then(|l| l.column).unwrap_or(0),
+                                        line,
+                                        0, // max_col
+                                    ));
+                                    
+                                    // Update counters and ranges
+                                    entry.0 = entry.0.saturating_add(1);
+
+                                    if entry.0 == 1 {
+                                        // Initialized above
+                                    } else {
+                                        entry.1 = entry.1.min(line);
+                                        entry.3 = entry.3.max(line);
+                                    }
+                                    
+                                    if let Some(c) = frame.location.as_ref().and_then(|l| l.column) {
+                                         if entry.0 == 1 {
+                                             entry.2 = c;
+                                             entry.4 = c;
+                                         } else {
+                                            entry.2 = entry.2.min(c);
+                                            entry.4 = entry.4.max(c);
+                                         }
+                                    }
+                                    
+                                    // We only care about the most specific frame (top of stack) for "ownership"
+                                    // or should we count all frames?
+                                    // If we count all frames, we might get the "ghost" files again if they are just wrappers.
+                                    // But usually we want the inlined code.
+                                    // Let's just take the first valid frame (top of stack).
+                                    break;
+                                }
+                             }
+                        }
+                        
+                        if ops.read().is_err() {
+                            break;
+                        }
+                    }
+                    
+                    // We are done
                     break;
                 }
                 defined_funcs_seen += 1;
             }
             _ => {}
         }
-    }
-
-    let start = if let Some(s) = func_body_start { s } else { return Vec::new() };
-    let end = if let Some(e) = func_body_end { e } else { return Vec::new() };
-    let body_len = end.saturating_sub(start);
-    if body_len == 0 {
-        return Vec::new();
-    }
-
-    // Probe offsets across the body to gather source lines grouped by file
-    // Map: file -> (count, min_line, min_col, max_line, max_col)
-    let mut file_stats: Map<String, (u32, u32, u32, u32, u32)> = Map::new();
-
-    // Normalize to the module-relative "address space" used by addr2line context.
-    let base = start.saturating_sub(dc.code_section_start);
-
-    // Sample offsets 0..min(body_len, 8192) stepping by 4 bytes (coarse but fast)
-    let max_probe = body_len.min(8192);
-    let mut offset = 0usize;
-    while offset < max_probe {
-        let address = (base + offset) as u64;
-        if let Ok(loc_opt) = dc.ctx.find_location(address) {
-            if let Some(loc) = loc_opt {
-                let file = loc
-                    .file
-                    .as_ref()
-                    .map(|f| f.to_string())
-                    .unwrap_or_else(|| "<unknown>".to_string());
-                let entry = file_stats.entry(file).or_insert((
-                    0,
-                    loc.line.unwrap_or(0),
-                    loc.column.unwrap_or(0),
-                    0,
-                    0,
-                ));
-                // Update counters and ranges
-                entry.0 = entry.0.saturating_add(1);
-
-                if let Some(l) = loc.line {
-                    entry.1 = entry.1.min(l);
-                    entry.3 = entry.3.max(l);
-                }
-                if let Some(c) = loc.column {
-                    entry.2 = entry.2.min(c);
-                    entry.4 = entry.4.max(c);
-                }
-            }
-        }
-        offset += 4;
     }
 
     if file_stats.is_empty() {
