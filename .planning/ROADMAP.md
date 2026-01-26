@@ -30,8 +30,8 @@ This roadmap transforms wasm-poke from a ratatui TUI to an egui desktop applicat
 **Plans:** 2 plans
 
 Plans:
-- [ ] 01-01-PLAN.md - Create egui app shell with dockable panel layout
-- [ ] 01-02-PLAN.md - Implement file loading and display function count
+- [x] 01-01-PLAN.md - Create egui app shell with dockable panel layout
+- [x] 01-02-PLAN.md - Implement file loading and display function count
 
 **Notes:**
 - This phase establishes the SelectionState pattern that all subsequent phases depend on
@@ -167,15 +167,16 @@ Plans:
 
 | Phase | Status | Requirements | Completion |
 |-------|--------|--------------|------------|
-| 1 - Foundation | Planned | FOUND-01, FOUND-02 | 0% |
+| 1 - Foundation | ✓ Complete | FOUND-01, FOUND-02 | 100% |
 | 2 - Function List | Not Started | LIST-01, LIST-02, LIST-03, LIST-04 | 0% |
 | 3 - Call Graph | Not Started | CALL-01, CALL-02, CALL-03, CALL-04 | 0% |
 | 4 - Inspector | Not Started | INSP-01, INSP-02, INSP-05 | 0% |
 | 5 - Navigation & Help | Not Started | INSP-03, INSP-04 | 0% |
 | 6 - Output Modes | Not Started | OUT-01, OUT-02 | 0% |
 
-**Overall:** 0/6 phases complete (0%)
+**Overall:** 1/6 phases complete (17%)
 
 ---
 *Roadmap created: 2026-01-26*
 *Last updated: 2026-01-26*
+*Phase 1 completed: 2026-01-26*

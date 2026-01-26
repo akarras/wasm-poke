@@ -9,8 +9,8 @@ Requirements for the egui rewrite. Each maps to roadmap phases.
 
 ### Foundation
 
-- [ ] **FOUND-01**: egui app shell with eframe and egui_dock for panel layout
-- [ ] **FOUND-02**: Centralized state architecture (single source of truth for selections)
+- [x] **FOUND-01**: egui app shell with eframe and egui_dock for panel layout
+- [x] **FOUND-02**: Centralized state architecture (single source of truth for selections)
 
 ### List Views
 
@@ -76,8 +76,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| FOUND-01 | Phase 1 | Pending |
-| FOUND-02 | Phase 1 | Pending |
+| FOUND-01 | Phase 1 | Complete |
+| FOUND-02 | Phase 1 | Complete |
 | LIST-01 | Phase 2 | Pending |
 | LIST-02 | Phase 2 | Pending |
 | LIST-03 | Phase 2 | Pending |
@@ -101,4 +101,4 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 ---
 *Requirements defined: 2026-01-26*
-*Last updated: 2026-01-26 after roadmap creation*
+*Last updated: 2026-01-26 after Phase 1 completion*
