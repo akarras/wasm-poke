@@ -383,7 +383,8 @@ impl FunctionListPanel {
                     row.set_selected(is_selected);
 
                     // Helper closure to handle clicks with modifier support
-                    let mut handle_click = |ui: &egui::Ui, clicked: bool| {
+                    // Returns true if selection was changed
+                    let mut handle_click = |ui: &egui::Ui, clicked: bool| -> bool {
                         if clicked {
                             let modifiers = ui.input(|i| i.modifiers);
 
@@ -417,8 +418,13 @@ impl FunctionListPanel {
                                 // Plain click: single select
                                 selection.select_single(func_index);
                             }
+                            return true;
                         }
+                        false
                     };
+
+                    // Track if any column click changed selection
+                    let mut clicked_in_row = false;
 
                     // Name column
                     row.col(|ui| {
@@ -428,7 +434,9 @@ impl FunctionListPanel {
                                 .truncate()
                                 .sense(egui::Sense::click()),
                         );
-                        handle_click(ui, response.clicked());
+                        if handle_click(ui, response.clicked()) {
+                            clicked_in_row = true;
+                        }
                         response.on_hover_text(&name);
                     });
 
@@ -439,7 +447,9 @@ impl FunctionListPanel {
                         let response = ui.add(
                             egui::Label::new(&size_str).sense(egui::Sense::click()),
                         );
-                        handle_click(ui, response.clicked());
+                        if handle_click(ui, response.clicked()) {
+                            clicked_in_row = true;
+                        }
                     });
 
                     // Calls column
@@ -448,8 +458,15 @@ impl FunctionListPanel {
                         let response = ui.add(
                             egui::Label::new(calls.to_string()).sense(egui::Sense::click()),
                         );
-                        handle_click(ui, response.clicked());
+                        if handle_click(ui, response.clicked()) {
+                            clicked_in_row = true;
+                        }
                     });
+
+                    // Note: Click-based selection doesn't need scroll_to_row since user
+                    // already clicked on a visible row. We track clicked_in_row for
+                    // potential future use (e.g., triggering inspector updates).
+                    let _ = clicked_in_row;
                 });
             });
 
