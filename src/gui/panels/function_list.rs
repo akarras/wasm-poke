@@ -377,9 +377,48 @@ impl FunctionListPanel {
                     let row_idx = row.index();
                     let func_idx = indices[row_idx];
                     let func = &module.functions[func_idx];
-                    let is_selected = selection.is_selected(func.index);
+                    let func_index = func.index;
+                    let is_selected = selection.is_selected(func_index);
 
                     row.set_selected(is_selected);
+
+                    // Helper closure to handle clicks with modifier support
+                    let mut handle_click = |ui: &egui::Ui, clicked: bool| {
+                        if clicked {
+                            let modifiers = ui.input(|i| i.modifiers);
+
+                            if modifiers.ctrl || modifiers.command {
+                                // Ctrl+click (or Cmd on Mac): toggle selection
+                                selection.toggle_select(func_index);
+                            } else if modifiers.shift {
+                                // Shift+click: extend selection from last_selected to this
+                                if let Some(from) = selection.last_selected {
+                                    // Find positions of 'from' and 'func_index' in cached_indices
+                                    let from_pos = indices.iter().position(|&i| module.functions[i].index == from);
+                                    let to_pos = row_idx;
+                                    if let Some(from_pos) = from_pos {
+                                        let (start, end) = if from_pos <= to_pos {
+                                            (from_pos, to_pos)
+                                        } else {
+                                            (to_pos, from_pos)
+                                        };
+                                        // Use extend_select_indices for filtered list range
+                                        let range_indices = (start..=end)
+                                            .map(|i| module.functions[indices[i]].index);
+                                        selection.extend_select_indices(range_indices);
+                                        selection.focus_index = Some(func_index);
+                                    } else {
+                                        selection.select_single(func_index);
+                                    }
+                                } else {
+                                    selection.select_single(func_index);
+                                }
+                            } else {
+                                // Plain click: single select
+                                selection.select_single(func_index);
+                            }
+                        }
+                    };
 
                     // Name column
                     row.col(|ui| {
@@ -389,9 +428,7 @@ impl FunctionListPanel {
                                 .truncate()
                                 .sense(egui::Sense::click()),
                         );
-                        if response.clicked() {
-                            selection.select_single(func.index);
-                        }
+                        handle_click(ui, response.clicked());
                         response.on_hover_text(&name);
                     });
 
@@ -402,9 +439,7 @@ impl FunctionListPanel {
                         let response = ui.add(
                             egui::Label::new(&size_str).sense(egui::Sense::click()),
                         );
-                        if response.clicked() {
-                            selection.select_single(func.index);
-                        }
+                        handle_click(ui, response.clicked());
                     });
 
                     // Calls column
@@ -413,9 +448,7 @@ impl FunctionListPanel {
                         let response = ui.add(
                             egui::Label::new(calls.to_string()).sense(egui::Sense::click()),
                         );
-                        if response.clicked() {
-                            selection.select_single(func.index);
-                        }
+                        handle_click(ui, response.clicked());
                     });
                 });
             });
