@@ -4,6 +4,7 @@
 //! for function analysis, call graphs, and source inspection.
 
 mod app;
+pub mod panels;
 mod state;
 mod tabs;
 
