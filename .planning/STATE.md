@@ -6,17 +6,17 @@
 
 **Core Value:** Developers can see exactly how their Rust code translates to Wasm instructions, with source mapping, so they can make informed performance decisions.
 
-**Current Focus:** Phase 3 In Progress - Call Tree Panel Complete
+**Current Focus:** Phase 3 Complete - All Call Graph Views Implemented
 
 **Key Constraint:** Desktop only - no web/WASM target. Centralized state to prevent sync bugs.
 
 ## Current Position
 
 **Phase:** 3 of 6 (Call Graph Views)
-**Plan:** 1 of 3 complete
-**Status:** In progress
+**Plan:** 3 of 3 complete
+**Status:** Phase complete
 
-**Progress:** [######....] 50%
+**Progress:** [########..] 75%
 
 ### Phase 3 Success Criteria
 
@@ -24,8 +24,8 @@
 - [x] Tree expand/collapse works
 - [x] Recursive calls handled gracefully (no infinite loops, shows marker)
 - [x] Selection syncs bidirectionally between function list and call tree
-- [ ] User can see Callers Tree tab (upstream calls)
-- [ ] User can see Size Tree tab (cumulative size impact)
+- [x] User can see Callers Tree tab (upstream calls)
+- [x] User can see Size Tree tab (cumulative size impact)
 
 ### Active Requirements
 
@@ -34,17 +34,17 @@
 | TREE-01 | Call Tree with expand/collapse | Complete |
 | TREE-02 | Cycle detection with marker | Complete |
 | TREE-03 | Depth limit of 5 levels | Complete |
-| TREE-04 | Callers Tree (upstream) | Pending |
-| TREE-05 | Size Tree (cumulative) | Pending |
+| TREE-04 | Callers Tree (upstream) | Complete |
+| TREE-05 | Size Tree (cumulative) | Complete |
 
 ## Performance Metrics
 
-**Plans Completed:** 6
+**Plans Completed:** 9
 **Plans Total:** ~12 (across 6 phases)
 **Verification Pass Rate:** 100%
 **Phase 1 Duration:** 11 min (01-01: 5 min, 01-02: 6 min)
 **Phase 2 Duration:** 13 min (02-01: 3 min, 02-02: 6 min, 02-03: 4 min)
-**Phase 3 Duration:** 5 min (03-01: 5 min)
+**Phase 3 Duration:** 18 min (03-01: 5 min, 03-02: 5 min, 03-03: 8 min)
 
 ## Accumulated Context
 
@@ -70,6 +70,9 @@
 | Closure-based click handling | Captures row context and modifiers cleanly | 02-03 |
 | CollapsingState over CollapsingHeader | Finer control over expand/collapse with custom headers | 03-01 |
 | Backtrack visited set after children | Prevents false positives when same function called via different paths | 03-01 |
+| Reverse graph computed once on load | O(E) precomputation enables O(1) caller lookup per function | 03-02 |
+| Logarithmic color scale for size | Linear scale makes small differences invisible; log scale differentiates better | 03-03 |
+| Warm orange for size visualization | Distinct from call tree, size = "weight" = warm colors | 03-03 |
 
 ### Technical Debt
 
@@ -90,26 +93,27 @@ None.
 - [x] Execute Plan 02-03 (Keyboard navigation and multi-select)
 - [x] Run `/gsd:plan-phase 3` to create Phase 3 execution plan (Tree Panels)
 - [x] Execute Plan 03-01 (Call Tree panel)
-- [ ] Execute Plan 03-02 (Callers Tree panel)
-- [ ] Execute Plan 03-03 (Size Tree panel)
+- [x] Execute Plan 03-02 (Callers Tree panel)
+- [x] Execute Plan 03-03 (Size Tree panel)
+- [ ] Run `/gsd:plan-phase 4` to create Phase 4 execution plan (Inspector Panel)
 
 ## Session Continuity
 
 ### Last Session
 
 **Date:** 2026-01-26
-**Accomplished:** Completed Plan 03-01 (Call Tree panel)
-  - CallTreePanel with CollapsingState-based expand/collapse
-  - Cycle detection with "(recursive)" marker
-  - 5-level depth limit with "..." marker
-  - Selection sync on click
+**Accomplished:** Completed Plan 03-03 (Size Tree panel)
+  - SizeTreePanel with cumulative size using unique_cumulative_size
+  - Size format: "name - X.X KiB (Y.Y%)"
+  - Logarithmic color-coded background for visual differentiation
+  - Same tree rendering pattern as CallTreePanel
   - Wired into app and tab viewer
-**Stopped At:** Plan 03-01 complete, ready for 03-02
+**Stopped At:** Phase 3 complete, ready for Phase 4
 
 ### Next Session
 
-**Start With:** Execute Plan 03-02 (Callers Tree panel)
-**Context Needed:** CallTreePanel pattern for tree rendering, CallGraph.edges for reverse lookup
+**Start With:** Run `/gsd:plan-phase 4` to plan Inspector Panel
+**Context Needed:** WAT disassembly from lib.rs, source mapping functions
 
 ### Important Files
 
@@ -127,6 +131,8 @@ None.
 | src/gui/panels/mod.rs | Panel module exports |
 | src/gui/panels/function_list.rs | FunctionListPanel with keyboard nav + multi-select |
 | src/gui/panels/call_tree.rs | CallTreePanel with tree rendering |
+| src/gui/panels/callers_tree.rs | CallersTreePanel with upstream calls |
+| src/gui/panels/size_tree.rs | SizeTreePanel with cumulative size |
 | src/main.rs | egui entry point |
 
 ---
@@ -137,3 +143,6 @@ None.
 *Plan 02-03 completed: 2026-01-26*
 *Phase 2 completed: 2026-01-26*
 *Plan 03-01 completed: 2026-01-26*
+*Plan 03-02 completed: 2026-01-26*
+*Plan 03-03 completed: 2026-01-26*
+*Phase 3 completed: 2026-01-26*
