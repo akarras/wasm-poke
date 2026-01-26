@@ -3,6 +3,7 @@
 //! Contains `WasmPokeApp` which holds all application state and implements
 //! the egui rendering loop.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use eframe::egui;
@@ -20,6 +21,9 @@ pub struct WasmPokeApp {
     pub module: Option<WasmModuleInfo>,
     /// Call graph edges between functions.
     pub call_graph: Option<CallGraph>,
+    /// Reverse call graph: callee -> [callers]
+    /// Computed once on file load for Callers tree view.
+    pub reverse_graph: Option<HashMap<u32, Vec<u32>>>,
     /// Raw wasm bytes for disassembly and source mapping.
     pub wasm_bytes: Option<Vec<u8>>,
     /// Path to the loaded wasm file.
@@ -46,6 +50,7 @@ impl WasmPokeApp {
         Self {
             module: None,
             call_graph: None,
+            reverse_graph: None,
             wasm_bytes: None,
             wasm_path: None,
             selection: SelectionState::default(),
@@ -53,6 +58,18 @@ impl WasmPokeApp {
             call_tree_panel: CallTreePanel::new(),
             dock_state: Self::default_dock_state(),
         }
+    }
+
+    /// Build reverse call graph: callee -> [callers]
+    /// Used by Callers tree to show "who calls this function"
+    fn build_reverse_graph(graph: &CallGraph) -> HashMap<u32, Vec<u32>> {
+        let mut reverse: HashMap<u32, Vec<u32>> = HashMap::new();
+        for (&caller, callees) in &graph.edges {
+            for &callee in callees {
+                reverse.entry(callee).or_default().push(caller);
+            }
+        }
+        reverse
     }
 
     /// Create the default dock layout with four panels.
@@ -92,11 +109,13 @@ impl WasmPokeApp {
                 match std::fs::read(&path) {
                     Ok(bytes) => {
                         let call_graph = wasm_poke::build_call_graph(&bytes).ok();
+                        let reverse_graph = call_graph.as_ref().map(Self::build_reverse_graph);
 
                         self.wasm_path = Some(path.display().to_string());
                         self.wasm_bytes = Some(bytes);
                         self.module = Some(module);
                         self.call_graph = call_graph;
+                        self.reverse_graph = reverse_graph;
                         self.selection = SelectionState::default();
 
                         log::info!("Loaded: {}", path.display());
