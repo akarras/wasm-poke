@@ -54,13 +54,17 @@ Deferred to future release. Tracked but not in current roadmap.
 - **PERS-02**: Annotations on functions/instructions
 - **PERS-03**: Layout persistence across sessions
 
+### Web Deployment
+
+- **WEB-01**: Web build target (Wasm frontend) - deferred due to DWARF filesystem requirements
+
 ## Out of Scope
 
 Explicitly excluded. Documented to prevent scope creep.
 
 | Feature | Reason |
 |---------|--------|
-| Web/WASM build | DWARF source mapping requires filesystem access |
+| Web/WASM build (v1) | DWARF source mapping requires filesystem access |
 | Real-time file watching | Overengineered for manual analysis workflow |
 | Runtime/dynamic tracing | Changes tool category from static analyzer to profiler |
 | Full debugger functionality | Chrome DevTools already exists for Wasm debugging |
@@ -72,29 +76,29 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| FOUND-01 | TBD | Pending |
-| FOUND-02 | TBD | Pending |
-| LIST-01 | TBD | Pending |
-| LIST-02 | TBD | Pending |
-| LIST-03 | TBD | Pending |
-| LIST-04 | TBD | Pending |
-| CALL-01 | TBD | Pending |
-| CALL-02 | TBD | Pending |
-| CALL-03 | TBD | Pending |
-| CALL-04 | TBD | Pending |
-| INSP-01 | TBD | Pending |
-| INSP-02 | TBD | Pending |
-| INSP-03 | TBD | Pending |
-| INSP-04 | TBD | Pending |
-| INSP-05 | TBD | Pending |
-| OUT-01 | TBD | Pending |
-| OUT-02 | TBD | Pending |
+| FOUND-01 | Phase 1 | Pending |
+| FOUND-02 | Phase 1 | Pending |
+| LIST-01 | Phase 2 | Pending |
+| LIST-02 | Phase 2 | Pending |
+| LIST-03 | Phase 2 | Pending |
+| LIST-04 | Phase 2 | Pending |
+| CALL-01 | Phase 3 | Pending |
+| CALL-02 | Phase 3 | Pending |
+| CALL-03 | Phase 3 | Pending |
+| CALL-04 | Phase 3 | Pending |
+| INSP-01 | Phase 4 | Pending |
+| INSP-02 | Phase 4 | Pending |
+| INSP-03 | Phase 5 | Pending |
+| INSP-04 | Phase 5 | Pending |
+| INSP-05 | Phase 4 | Pending |
+| OUT-01 | Phase 6 | Pending |
+| OUT-02 | Phase 6 | Pending |
 
 **Coverage:**
 - v1 requirements: 17 total
-- Mapped to phases: 0
-- Unmapped: 17 ⚠️
+- Mapped to phases: 17
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-01-26*
-*Last updated: 2026-01-26 after initial definition*
+*Last updated: 2026-01-26 after roadmap creation*
