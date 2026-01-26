@@ -59,6 +59,13 @@ Plans:
 4. User can navigate the list with j/k keys and jump to top/bottom with g/G
 5. Selecting a function updates the global selection state (visible in other panels when they exist)
 
+**Plans:** 3 plans
+
+Plans:
+- [ ] 02-01-PLAN.md - Extend SelectionState for multi-select and add bytesize dependency
+- [ ] 02-02-PLAN.md - Implement FunctionListPanel with table, sorting, and filtering
+- [ ] 02-03-PLAN.md - Add keyboard navigation and multi-select click handling
+
 **Notes:**
 - Use egui_extras TableBuilder for virtualization (handles 10K+ functions)
 - Store selection as function index, not list position (prevents filter desync)
@@ -167,8 +174,8 @@ Plans:
 
 | Phase | Status | Requirements | Completion |
 |-------|--------|--------------|------------|
-| 1 - Foundation | ✓ Complete | FOUND-01, FOUND-02 | 100% |
-| 2 - Function List | Not Started | LIST-01, LIST-02, LIST-03, LIST-04 | 0% |
+| 1 - Foundation | Complete | FOUND-01, FOUND-02 | 100% |
+| 2 - Function List | Planned | LIST-01, LIST-02, LIST-03, LIST-04 | 0% |
 | 3 - Call Graph | Not Started | CALL-01, CALL-02, CALL-03, CALL-04 | 0% |
 | 4 - Inspector | Not Started | INSP-01, INSP-02, INSP-05 | 0% |
 | 5 - Navigation & Help | Not Started | INSP-03, INSP-04 | 0% |
@@ -179,4 +186,4 @@ Plans:
 ---
 *Roadmap created: 2026-01-26*
 *Last updated: 2026-01-26*
-*Phase 1 completed: 2026-01-26*
+*Phase 2 planned: 2026-01-26*
