@@ -3,11 +3,12 @@
 //! Contains `WasmPokeApp` which holds all application state and implements
 //! the egui rendering loop.
 
+use eframe::egui;
 use egui_dock::{DockArea, DockState, NodeIndex};
 
 use crate::gui::state::SelectionState;
 use crate::gui::tabs::TabKind;
-use crate::{CallGraph, WasmModuleInfo};
+use wasm_poke::{CallGraph, WasmModuleInfo};
 
 /// Main application struct holding all state.
 pub struct WasmPokeApp {
@@ -67,11 +68,11 @@ impl eframe::App for WasmPokeApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Menu bar for file operations
         egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
-            egui::menu::bar(ui, |ui| {
+            ui.horizontal(|ui| {
                 ui.menu_button("File", |ui| {
                     if ui.button("Open...").clicked() {
                         // File loading implemented in Plan 02
-                        ui.close_menu();
+                        ui.close();
                     }
                     ui.separator();
                     if ui.button("Quit").clicked() {
@@ -81,17 +82,24 @@ impl eframe::App for WasmPokeApp {
             });
         });
 
-        // Main dock area
+        // Main dock area - create tab viewer with references to app state
+        let mut tab_viewer = WasmPokeTabViewer {
+            module: self.module.as_ref(),
+        };
+
         egui::CentralPanel::default().show(ctx, |_ui| {
             DockArea::new(&mut self.dock_state)
-                .show(ctx, &mut WasmPokeTabViewer { app: self });
+                .show(ctx, &mut tab_viewer);
         });
     }
 }
 
 /// TabViewer implementation that renders each panel type.
+///
+/// This struct holds references to the parts of WasmPokeApp needed for rendering,
+/// avoiding the borrow checker issue with passing &mut self to both DockArea and TabViewer.
 pub struct WasmPokeTabViewer<'a> {
-    app: &'a mut WasmPokeApp,
+    module: Option<&'a WasmModuleInfo>,
 }
 
 impl egui_dock::TabViewer for WasmPokeTabViewer<'_> {
@@ -104,7 +112,7 @@ impl egui_dock::TabViewer for WasmPokeTabViewer<'_> {
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab) {
         match tab {
             TabKind::FunctionList => {
-                if let Some(module) = &self.app.module {
+                if let Some(module) = self.module {
                     ui.label(format!("{} functions", module.defined_functions));
                 } else {
                     ui.label("No file loaded. Use File -> Open to load a .wasm file.");
