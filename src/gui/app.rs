@@ -135,6 +135,7 @@ impl eframe::App for WasmPokeApp {
 
         // Main dock area - create tab viewer with references to app state
         let mut tab_viewer = WasmPokeTabViewer {
+            ctx,
             module: self.module.as_ref(),
             call_graph: self.call_graph.as_ref(),
             wasm_path: self.wasm_path.as_deref(),
@@ -154,6 +155,7 @@ impl eframe::App for WasmPokeApp {
 /// This struct holds references to the parts of WasmPokeApp needed for rendering,
 /// avoiding the borrow checker issue with passing &mut self to both DockArea and TabViewer.
 pub struct WasmPokeTabViewer<'a> {
+    ctx: &'a egui::Context,
     module: Option<&'a WasmModuleInfo>,
     call_graph: Option<&'a CallGraph>,
     wasm_path: Option<&'a str>,
@@ -173,6 +175,7 @@ impl egui_dock::TabViewer for WasmPokeTabViewer<'_> {
             TabKind::FunctionList => {
                 if let Some(module) = self.module {
                     self.function_list_panel.show(
+                        self.ctx,
                         ui,
                         module,
                         self.call_graph,

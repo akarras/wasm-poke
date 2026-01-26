@@ -2,9 +2,12 @@
 //!
 //! This panel displays all functions in a scrollable table with sortable columns
 //! (Name, Size, Calls) and a filter input for live filtering.
+//!
+//! Supports vim-style keyboard navigation (j/k/g/G) and multi-select click interactions
+//! (Ctrl+click, Shift+click).
 
 use bytesize::ByteSize;
-use eframe::egui;
+use eframe::egui::{self, Key};
 use egui_extras::{Column, TableBuilder};
 
 use crate::gui::state::SelectionState;
@@ -36,6 +39,10 @@ pub struct FunctionListPanel {
     cache_dirty: bool,
     /// Total function count (for "N of M" display).
     total_function_count: usize,
+    /// Whether selection just changed (triggers scroll_to_row).
+    selection_changed: bool,
+    /// Whether the filter input currently has focus.
+    filter_focused: bool,
 }
 
 impl FunctionListPanel {
@@ -48,6 +55,8 @@ impl FunctionListPanel {
             cached_indices: Vec::new(),
             cache_dirty: true,
             total_function_count: 0,
+            selection_changed: false,
+            filter_focused: false,
         }
     }
 
@@ -119,25 +128,136 @@ impl FunctionListPanel {
             .count()
     }
 
+    /// Handle keyboard navigation for vim-style navigation.
+    ///
+    /// Returns Some(row_position) if the focus changed and we should scroll to that row.
+    fn handle_keyboard(
+        &mut self,
+        ctx: &egui::Context,
+        selection: &mut SelectionState,
+        module: &WasmModuleInfo,
+        visible_rows: usize,
+    ) -> Option<usize> {
+        let filtered_count = self.cached_indices.len();
+
+        // Early return if no functions or filter has focus
+        if filtered_count == 0 || self.filter_focused {
+            return None;
+        }
+
+        // Get current focus position in the filtered list
+        let current_pos = selection.focus_index.and_then(|focus| {
+            self.cached_indices
+                .iter()
+                .position(|&i| module.functions[i].index == focus)
+        });
+
+        // Default to 0 if no focus
+        let current_pos = current_pos.unwrap_or(0);
+
+        // Check modifiers
+        let (shift, ctrl) = ctx.input(|i| (i.modifiers.shift, i.modifiers.ctrl || i.modifiers.command));
+
+        // Determine new position based on key pressed
+        let new_pos = ctx.input(|i| {
+            // j or ArrowDown: move down 1
+            if i.key_pressed(Key::J) || i.key_pressed(Key::ArrowDown) {
+                return Some(current_pos.saturating_add(1).min(filtered_count - 1));
+            }
+            // k or ArrowUp: move up 1
+            if i.key_pressed(Key::K) || i.key_pressed(Key::ArrowUp) {
+                return Some(current_pos.saturating_sub(1));
+            }
+            // g (without shift) or Home: jump to top
+            if (i.key_pressed(Key::G) && !shift) || i.key_pressed(Key::Home) {
+                return Some(0);
+            }
+            // G (with shift) or End: jump to bottom
+            if (i.key_pressed(Key::G) && shift) || i.key_pressed(Key::End) {
+                return Some(filtered_count - 1);
+            }
+            // Ctrl+d: half-page down
+            if i.key_pressed(Key::D) && ctrl {
+                let half_page = visible_rows / 2;
+                return Some(current_pos.saturating_add(half_page).min(filtered_count - 1));
+            }
+            // Ctrl+u: half-page up
+            if i.key_pressed(Key::U) && ctrl {
+                let half_page = visible_rows / 2;
+                return Some(current_pos.saturating_sub(half_page));
+            }
+            None
+        });
+
+        // If position changed, update selection
+        if let Some(new_pos) = new_pos {
+            if new_pos != current_pos || selection.focus_index.is_none() {
+                let func_index = module.functions[self.cached_indices[new_pos]].index;
+
+                if shift {
+                    // Shift held: extend selection from last to new
+                    if let Some(from) = selection.last_selected {
+                        // Find from position in cached_indices
+                        let from_pos = self.cached_indices
+                            .iter()
+                            .position(|&i| module.functions[i].index == from);
+
+                        if let Some(from_pos) = from_pos {
+                            let (start, end) = if from_pos <= new_pos {
+                                (from_pos, new_pos)
+                            } else {
+                                (new_pos, from_pos)
+                            };
+                            let indices = (start..=end)
+                                .map(|i| module.functions[self.cached_indices[i]].index);
+                            selection.extend_select_indices(indices);
+                            selection.focus_index = Some(func_index);
+                        } else {
+                            selection.select_single(func_index);
+                        }
+                    } else {
+                        selection.select_single(func_index);
+                    }
+                } else {
+                    // No shift: single select
+                    selection.select_single(func_index);
+                }
+
+                self.selection_changed = true;
+                return Some(new_pos);
+            }
+        }
+
+        None
+    }
+
     /// Main render method for the function list panel.
     pub fn show(
         &mut self,
+        ctx: &egui::Context,
         ui: &mut egui::Ui,
         module: &WasmModuleInfo,
         call_graph: Option<&CallGraph>,
         selection: &mut SelectionState,
     ) {
+        // Reset selection_changed flag at start of frame
+        self.selection_changed = false;
+
         // Filter input
         ui.horizontal(|ui| {
             ui.label("Filter:");
+            let filter_id = ui.make_persistent_id("function_filter");
             let response = ui.add(
                 egui::TextEdit::singleline(&mut self.filter_text)
+                    .id(filter_id)
                     .hint_text("Type to filter...")
                     .desired_width(200.0),
             );
             if response.changed() {
                 self.cache_dirty = true;
             }
+            // Track if filter has focus (to disable vim keys while typing)
+            self.filter_focused = response.has_focus();
 
             // Match count
             if self.cache_dirty {
@@ -158,16 +278,30 @@ impl FunctionListPanel {
             self.rebuild_cache(module, call_graph);
         }
 
-        // Table
+        // Calculate visible rows for half-page navigation
         let available_height = ui.available_height();
-        TableBuilder::new(ui)
+        let visible_rows = (available_height / ROW_HEIGHT).floor() as usize;
+        let visible_rows = visible_rows.max(1);
+
+        // Handle keyboard navigation before building table
+        let scroll_to = self.handle_keyboard(ctx, selection, module, visible_rows);
+
+        // Build table with optional scroll_to_row
+        let mut table = TableBuilder::new(ui)
             .striped(true)
             .resizable(true)
             .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
             .column(Column::auto().at_least(200.0).clip(true)) // Name
             .column(Column::auto().at_least(80.0)) // Size
             .column(Column::auto().at_least(60.0)) // Calls
-            .max_scroll_height(available_height)
+            .max_scroll_height(available_height);
+
+        // Apply scroll_to_row if selection changed via keyboard
+        if let Some(row_pos) = scroll_to {
+            table = table.scroll_to_row(row_pos, Some(egui::Align::Center));
+        }
+
+        table
             .header(ROW_HEIGHT, |mut header| {
                 // Name column header
                 header.col(|ui| {
@@ -285,6 +419,11 @@ impl FunctionListPanel {
                     });
                 });
             });
+
+        // Request repaint if selection changed to ensure smooth updates
+        if self.selection_changed {
+            ctx.request_repaint();
+        }
     }
 }
 
