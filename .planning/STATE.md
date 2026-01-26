@@ -6,39 +6,40 @@
 
 **Core Value:** Developers can see exactly how their Rust code translates to Wasm instructions, with source mapping, so they can make informed performance decisions.
 
-**Current Focus:** Foundation & State Architecture (Phase 1)
+**Current Focus:** Function List Panel (Phase 2)
 
 **Key Constraint:** Desktop only - no web/WASM target. Centralized state to prevent sync bugs.
 
 ## Current Position
 
-**Phase:** 1 of 6 (Foundation & State Architecture)
-**Plan:** 2 of 2 complete
-**Status:** Phase complete
+**Phase:** 2 of 6 (Function List Panel)
+**Plan:** 1 of 3 complete
+**Status:** In progress
 
-**Progress:** [##........] 17%
+**Progress:** [###.......] 25%
 
-### Phase 1 Success Criteria
+### Phase 2 Success Criteria
 
-- [x] User can launch the application and see a window with dockable panel layout
-- [x] User can load a Wasm file via native file dialog
-- [x] Application displays parsed function count after loading
-- [x] Panel layout can be rearranged by dragging
+- [ ] User sees scrollable list of functions with names and sizes
+- [ ] User can select functions (single click, Ctrl+click, Shift+click)
+- [ ] User can filter functions by typing in search box
+- [ ] List performs well with 1000+ functions (virtualized rendering)
 
 ### Active Requirements
 
 | ID | Requirement | Status |
 |----|-------------|--------|
-| FOUND-01 | egui app shell with eframe and egui_dock | Complete |
-| FOUND-02 | Centralized state architecture | Complete |
-| FOUND-03 | File loading with native dialog | Complete |
+| FUNC-01 | Function list with virtualized rendering | In Progress |
+| FUNC-02 | Multi-select support (Ctrl/Shift click) | State Ready |
+| FUNC-03 | Name filter search box | Pending |
 
 ## Performance Metrics
 
-**Plans Completed:** 2
+**Plans Completed:** 3
 **Plans Total:** ~12 (across 6 phases)
 **Verification Pass Rate:** 100%
 **Phase 1 Duration:** 11 min (01-01: 5 min, 01-02: 6 min)
+**Phase 2 Duration:** 3 min so far (02-01: 3 min)
 
 ## Accumulated Context
 
@@ -54,6 +55,9 @@
 | Separate dialog from parsing | load_wasm_file shows dialog; load_wasm_from_path handles parsing/state | 01-02 |
 | Log errors instead of dialogs | Parse failures logged via log::error, no UI interruption | 01-02 |
 | Reset SelectionState on load | Prevents stale selections when loading new file | 01-02 |
+| BTreeSet for multi-select | Deterministic iteration order for predictable selection display | 02-01 |
+| Separate focus from selection | focus_index allows keyboard navigation preview before confirming | 02-01 |
+| last_selected for inspector | Inspector shows one function even with multi-select | 02-01 |
 
 ### Technical Debt
 
@@ -68,22 +72,28 @@ None.
 - [x] Run `/gsd:plan-phase 1` to create Phase 1 execution plan
 - [x] Execute Plan 01-01 (egui app shell)
 - [x] Execute Plan 01-02 (File loading)
-- [ ] Run `/gsd:plan-phase 2` to create Phase 2 execution plan (Function List)
+- [x] Run `/gsd:plan-phase 2` to create Phase 2 execution plan (Function List)
+- [x] Execute Plan 02-01 (State extension for multi-select)
+- [ ] Execute Plan 02-02 (Function list with TableBuilder)
+- [ ] Execute Plan 02-03 (Selection and filter integration)
 
 ## Session Continuity
 
 ### Last Session
 
 **Date:** 2026-01-26
-**Accomplished:** Completed Phase 1 (Foundation & State Architecture)
-  - Plan 01-01: egui application shell with dockable panels
-  - Plan 01-02: File loading with native dialog and function count display
-**Stopped At:** Phase 1 complete, ready for Phase 2
+**Accomplished:** Completed Plan 02-01 (State extension for multi-select)
+  - Added bytesize and egui_extras dependencies
+  - Extended SelectionState with BTreeSet<u32> multi-select
+  - Added focus_index and last_selected tracking
+  - Added helper methods for selection manipulation
+  - 6 unit tests pass
+**Stopped At:** Plan 02-01 complete, ready for Plan 02-02
 
 ### Next Session
 
-**Start With:** Run `/gsd:plan-phase 2` to create Phase 2 execution plan (Function List)
-**Context Needed:** ROADMAP.md, 01-01-SUMMARY.md, 01-02-SUMMARY.md, src/gui/app.rs
+**Start With:** Execute Plan 02-02 (Function list with TableBuilder)
+**Context Needed:** 02-01-SUMMARY.md, src/gui/state.rs, src/gui/app.rs
 
 ### Important Files
 
@@ -96,10 +106,11 @@ None.
 | src/lib.rs | Analysis entry point (preserve) |
 | src/gui/mod.rs | GUI module exports |
 | src/gui/app.rs | WasmPokeApp and eframe::App impl |
-| src/gui/state.rs | SelectionState centralized selection |
+| src/gui/state.rs | SelectionState with multi-select support |
 | src/gui/tabs.rs | TabKind enum for panel types |
 | src/main.rs | egui entry point |
 
 ---
 *State initialized: 2026-01-26*
 *Phase 1 completed: 2026-01-26*
+*Plan 02-01 completed: 2026-01-26*
