@@ -3,6 +3,8 @@
 //! Contains `WasmPokeApp` which holds all application state and implements
 //! the egui rendering loop.
 
+use std::path::PathBuf;
+
 use eframe::egui;
 use egui_dock::{DockArea, DockState, NodeIndex};
 
@@ -62,16 +64,59 @@ impl WasmPokeApp {
 
         state
     }
+
+    /// Load a Wasm file via native file dialog and parse it.
+    fn load_wasm_file(&mut self) {
+        if let Some(path) = rfd::FileDialog::new()
+            .add_filter("WebAssembly", &["wasm"])
+            .pick_file()
+        {
+            self.load_wasm_from_path(path);
+        }
+    }
+
+    /// Load and parse a Wasm file from a given path.
+    fn load_wasm_from_path(&mut self, path: PathBuf) {
+        match wasm_poke::parse_wasm(&path) {
+            Ok(module) => {
+                // Read bytes for call graph analysis
+                match std::fs::read(&path) {
+                    Ok(bytes) => {
+                        let call_graph = wasm_poke::build_call_graph(&bytes).ok();
+
+                        self.wasm_path = Some(path.display().to_string());
+                        self.wasm_bytes = Some(bytes);
+                        self.module = Some(module);
+                        self.call_graph = call_graph;
+                        self.selection = SelectionState::default();
+
+                        log::info!("Loaded: {}", path.display());
+                    }
+                    Err(e) => {
+                        log::error!("Failed to read file: {}", e);
+                    }
+                }
+            }
+            Err(e) => {
+                log::error!("Failed to parse wasm: {}", e);
+            }
+        }
+    }
 }
 
 impl eframe::App for WasmPokeApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Global keyboard shortcuts
+        if ctx.input(|i| i.key_pressed(egui::Key::O) && i.modifiers.ctrl) {
+            self.load_wasm_file();
+        }
+
         // Menu bar for file operations
         egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.menu_button("File", |ui| {
                     if ui.button("Open...").clicked() {
-                        // File loading implemented in Plan 02
+                        self.load_wasm_file();
                         ui.close();
                     }
                     ui.separator();
@@ -85,6 +130,7 @@ impl eframe::App for WasmPokeApp {
         // Main dock area - create tab viewer with references to app state
         let mut tab_viewer = WasmPokeTabViewer {
             module: self.module.as_ref(),
+            wasm_path: self.wasm_path.as_deref(),
         };
 
         egui::CentralPanel::default().show(ctx, |_ui| {
@@ -100,6 +146,7 @@ impl eframe::App for WasmPokeApp {
 /// avoiding the borrow checker issue with passing &mut self to both DockArea and TabViewer.
 pub struct WasmPokeTabViewer<'a> {
     module: Option<&'a WasmModuleInfo>,
+    wasm_path: Option<&'a str>,
 }
 
 impl egui_dock::TabViewer for WasmPokeTabViewer<'_> {
@@ -113,7 +160,15 @@ impl egui_dock::TabViewer for WasmPokeTabViewer<'_> {
         match tab {
             TabKind::FunctionList => {
                 if let Some(module) = self.module {
-                    ui.label(format!("{} functions", module.defined_functions));
+                    ui.horizontal(|ui| {
+                        ui.label("Loaded:");
+                        ui.label(self.wasm_path.unwrap_or("unknown"));
+                    });
+                    ui.separator();
+                    ui.label(format!(
+                        "{} defined functions, {} total code bytes",
+                        module.defined_functions, module.total_code_size
+                    ));
                 } else {
                     ui.label("No file loaded. Use File -> Open to load a .wasm file.");
                 }
