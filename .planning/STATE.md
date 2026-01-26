@@ -13,33 +13,33 @@
 ## Current Position
 
 **Phase:** 2 of 6 (Function List Panel)
-**Plan:** 1 of 3 complete
+**Plan:** 2 of 3 complete
 **Status:** In progress
 
-**Progress:** [###.......] 25%
+**Progress:** [####......] 33%
 
 ### Phase 2 Success Criteria
 
-- [ ] User sees scrollable list of functions with names and sizes
+- [x] User sees scrollable list of functions with names and sizes
 - [ ] User can select functions (single click, Ctrl+click, Shift+click)
-- [ ] User can filter functions by typing in search box
-- [ ] List performs well with 1000+ functions (virtualized rendering)
+- [x] User can filter functions by typing in search box
+- [x] List performs well with 1000+ functions (virtualized rendering)
 
 ### Active Requirements
 
 | ID | Requirement | Status |
 |----|-------------|--------|
-| FUNC-01 | Function list with virtualized rendering | In Progress |
-| FUNC-02 | Multi-select support (Ctrl/Shift click) | State Ready |
-| FUNC-03 | Name filter search box | Pending |
+| FUNC-01 | Function list with virtualized rendering | Complete |
+| FUNC-02 | Multi-select support (Ctrl/Shift click) | Single-click done, multi pending |
+| FUNC-03 | Name filter search box | Complete |
 
 ## Performance Metrics
 
-**Plans Completed:** 3
+**Plans Completed:** 4
 **Plans Total:** ~12 (across 6 phases)
 **Verification Pass Rate:** 100%
 **Phase 1 Duration:** 11 min (01-01: 5 min, 01-02: 6 min)
-**Phase 2 Duration:** 3 min so far (02-01: 3 min)
+**Phase 2 Duration:** 9 min so far (02-01: 3 min, 02-02: 6 min)
 
 ## Accumulated Context
 
@@ -58,6 +58,8 @@
 | BTreeSet for multi-select | Deterministic iteration order for predictable selection display | 02-01 |
 | Separate focus from selection | focus_index allows keyboard navigation preview before confirming | 02-01 |
 | last_selected for inspector | Inspector shows one function even with multi-select | 02-01 |
+| Cached indices for filter/sort | Store Vec<usize> into functions instead of cloning - memory efficient | 02-02 |
+| Incoming calls via edge iteration | Count calls by iterating CallGraph edges - simple and correct | 02-02 |
 
 ### Technical Debt
 
@@ -74,7 +76,7 @@ None.
 - [x] Execute Plan 01-02 (File loading)
 - [x] Run `/gsd:plan-phase 2` to create Phase 2 execution plan (Function List)
 - [x] Execute Plan 02-01 (State extension for multi-select)
-- [ ] Execute Plan 02-02 (Function list with TableBuilder)
+- [x] Execute Plan 02-02 (Function list with TableBuilder)
 - [ ] Execute Plan 02-03 (Selection and filter integration)
 
 ## Session Continuity
@@ -82,18 +84,19 @@ None.
 ### Last Session
 
 **Date:** 2026-01-26
-**Accomplished:** Completed Plan 02-01 (State extension for multi-select)
-  - Added bytesize and egui_extras dependencies
-  - Extended SelectionState with BTreeSet<u32> multi-select
-  - Added focus_index and last_selected tracking
-  - Added helper methods for selection manipulation
-  - 6 unit tests pass
-**Stopped At:** Plan 02-01 complete, ready for Plan 02-02
+**Accomplished:** Completed Plan 02-02 (Function list with TableBuilder)
+  - Created panels module structure (src/gui/panels/)
+  - Implemented FunctionListPanel with virtualized TableBuilder
+  - 3-column table: Name, Size (human-readable), Calls
+  - Filter input with match count display
+  - Clickable sort headers with direction indicators
+  - Single-click selection updates SelectionState
+**Stopped At:** Plan 02-02 complete, ready for Plan 02-03
 
 ### Next Session
 
-**Start With:** Execute Plan 02-02 (Function list with TableBuilder)
-**Context Needed:** 02-01-SUMMARY.md, src/gui/state.rs, src/gui/app.rs
+**Start With:** Execute Plan 02-03 (Selection and filter integration - multi-select)
+**Context Needed:** 02-02-SUMMARY.md, src/gui/panels/function_list.rs, src/gui/state.rs
 
 ### Important Files
 
@@ -108,9 +111,12 @@ None.
 | src/gui/app.rs | WasmPokeApp and eframe::App impl |
 | src/gui/state.rs | SelectionState with multi-select support |
 | src/gui/tabs.rs | TabKind enum for panel types |
+| src/gui/panels/mod.rs | Panel module exports |
+| src/gui/panels/function_list.rs | FunctionListPanel with TableBuilder |
 | src/main.rs | egui entry point |
 
 ---
 *State initialized: 2026-01-26*
 *Phase 1 completed: 2026-01-26*
 *Plan 02-01 completed: 2026-01-26*
+*Plan 02-02 completed: 2026-01-26*
