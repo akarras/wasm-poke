@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use eframe::egui;
 use egui_dock::{DockArea, DockState, NodeIndex};
 
-use crate::gui::panels::FunctionListPanel;
+use crate::gui::panels::{CallTreePanel, FunctionListPanel};
 use crate::gui::state::SelectionState;
 use crate::gui::tabs::TabKind;
 use wasm_poke::{CallGraph, WasmModuleInfo};
@@ -32,6 +32,8 @@ pub struct WasmPokeApp {
     // Panel state
     /// Function list panel state (filter, sort, cache).
     function_list_panel: FunctionListPanel,
+    /// Call tree panel state.
+    call_tree_panel: CallTreePanel,
 
     // UI layout
     /// Dock state for the panel layout.
@@ -48,6 +50,7 @@ impl WasmPokeApp {
             wasm_path: None,
             selection: SelectionState::default(),
             function_list_panel: FunctionListPanel::new(),
+            call_tree_panel: CallTreePanel::new(),
             dock_state: Self::default_dock_state(),
         }
     }
@@ -141,6 +144,7 @@ impl eframe::App for WasmPokeApp {
             wasm_path: self.wasm_path.as_deref(),
             selection: &mut self.selection,
             function_list_panel: &mut self.function_list_panel,
+            call_tree_panel: &mut self.call_tree_panel,
         };
 
         egui::CentralPanel::default().show(ctx, |_ui| {
@@ -161,6 +165,7 @@ pub struct WasmPokeTabViewer<'a> {
     wasm_path: Option<&'a str>,
     selection: &'a mut SelectionState,
     function_list_panel: &'a mut FunctionListPanel,
+    call_tree_panel: &'a mut CallTreePanel,
 }
 
 impl egui_dock::TabViewer for WasmPokeTabViewer<'_> {
@@ -186,7 +191,17 @@ impl egui_dock::TabViewer for WasmPokeTabViewer<'_> {
                 }
             }
             TabKind::CallTree => {
-                ui.label("Call Graph (Phase 3)");
+                if let Some(module) = self.module {
+                    self.call_tree_panel.show(
+                        self.ctx,
+                        ui,
+                        module,
+                        self.call_graph,
+                        self.selection,
+                    );
+                } else {
+                    ui.label("No file loaded. Use File -> Open to load a .wasm file.");
+                }
             }
             TabKind::SizeTree => {
                 ui.label("Size Tree (Phase 3)");
