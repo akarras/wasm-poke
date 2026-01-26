@@ -27,6 +27,12 @@ This roadmap transforms wasm-poke from a ratatui TUI to an egui desktop applicat
 3. Application displays parsed function count after loading (proves analysis pipeline connected)
 4. Panel layout can be rearranged by dragging (egui_dock working)
 
+**Plans:** 2 plans
+
+Plans:
+- [ ] 01-01-PLAN.md - Create egui app shell with dockable panel layout
+- [ ] 01-02-PLAN.md - Implement file loading and display function count
+
 **Notes:**
 - This phase establishes the SelectionState pattern that all subsequent phases depend on
 - No feature work until state architecture is validated
@@ -161,7 +167,7 @@ This roadmap transforms wasm-poke from a ratatui TUI to an egui desktop applicat
 
 | Phase | Status | Requirements | Completion |
 |-------|--------|--------------|------------|
-| 1 - Foundation | Not Started | FOUND-01, FOUND-02 | 0% |
+| 1 - Foundation | Planned | FOUND-01, FOUND-02 | 0% |
 | 2 - Function List | Not Started | LIST-01, LIST-02, LIST-03, LIST-04 | 0% |
 | 3 - Call Graph | Not Started | CALL-01, CALL-02, CALL-03, CALL-04 | 0% |
 | 4 - Inspector | Not Started | INSP-01, INSP-02, INSP-05 | 0% |
