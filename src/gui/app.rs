@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use eframe::egui;
 use egui_dock::{DockArea, DockState, NodeIndex};
 
+use crate::gui::panels::FunctionListPanel;
 use crate::gui::state::SelectionState;
 use crate::gui::tabs::TabKind;
 use wasm_poke::{CallGraph, WasmModuleInfo};
@@ -28,6 +29,10 @@ pub struct WasmPokeApp {
     /// Centralized selection state shared across all panels.
     pub selection: SelectionState,
 
+    // Panel state
+    /// Function list panel state (filter, sort, cache).
+    function_list_panel: FunctionListPanel,
+
     // UI layout
     /// Dock state for the panel layout.
     dock_state: DockState<TabKind>,
@@ -42,6 +47,7 @@ impl WasmPokeApp {
             wasm_bytes: None,
             wasm_path: None,
             selection: SelectionState::default(),
+            function_list_panel: FunctionListPanel::new(),
             dock_state: Self::default_dock_state(),
         }
     }
@@ -130,7 +136,10 @@ impl eframe::App for WasmPokeApp {
         // Main dock area - create tab viewer with references to app state
         let mut tab_viewer = WasmPokeTabViewer {
             module: self.module.as_ref(),
+            call_graph: self.call_graph.as_ref(),
             wasm_path: self.wasm_path.as_deref(),
+            selection: &mut self.selection,
+            function_list_panel: &mut self.function_list_panel,
         };
 
         egui::CentralPanel::default().show(ctx, |_ui| {
@@ -146,7 +155,10 @@ impl eframe::App for WasmPokeApp {
 /// avoiding the borrow checker issue with passing &mut self to both DockArea and TabViewer.
 pub struct WasmPokeTabViewer<'a> {
     module: Option<&'a WasmModuleInfo>,
+    call_graph: Option<&'a CallGraph>,
     wasm_path: Option<&'a str>,
+    selection: &'a mut SelectionState,
+    function_list_panel: &'a mut FunctionListPanel,
 }
 
 impl egui_dock::TabViewer for WasmPokeTabViewer<'_> {
@@ -160,15 +172,12 @@ impl egui_dock::TabViewer for WasmPokeTabViewer<'_> {
         match tab {
             TabKind::FunctionList => {
                 if let Some(module) = self.module {
-                    ui.horizontal(|ui| {
-                        ui.label("Loaded:");
-                        ui.label(self.wasm_path.unwrap_or("unknown"));
-                    });
-                    ui.separator();
-                    ui.label(format!(
-                        "{} defined functions, {} total code bytes",
-                        module.defined_functions, module.total_code_size
-                    ));
+                    self.function_list_panel.show(
+                        ui,
+                        module,
+                        self.call_graph,
+                        self.selection,
+                    );
                 } else {
                     ui.label("No file loaded. Use File -> Open to load a .wasm file.");
                 }
