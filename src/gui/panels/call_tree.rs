@@ -10,7 +10,8 @@
 use std::collections::HashSet;
 
 use bytesize::ByteSize;
-use eframe::egui::{self, collapsing_header::CollapsingState};
+use egui::collapsing_header::CollapsingState;
+use eframe::egui;
 
 use crate::gui::state::SelectionState;
 use wasm_poke::{CallGraph, WasmModuleInfo};
@@ -174,17 +175,16 @@ impl CallTreePanel {
             // Mark as visited before processing children
             visited.insert(func_index);
 
-            state
-                .show_header(ui, |ui: &mut egui::Ui| {
-                    let response = ui.add(
-                        egui::Label::new(format!("{} ({})", name, size_str))
-                            .sense(egui::Sense::click()),
-                    );
-                    if response.clicked() {
-                        selection.select_single(func_index);
-                    }
-                })
-                .body(|ui: &mut egui::Ui| {
+            let header_response = state.show_header(ui, |ui| {
+                let response = ui.add(
+                    egui::Label::new(format!("{} ({})", name, size_str))
+                        .sense(egui::Sense::click()),
+                );
+                if response.clicked() {
+                    selection.select_single(func_index);
+                }
+            });
+            header_response.body(|ui| {
                     if let Some(callees) = callees {
                         for (child_pos, &callee_index) in callees.iter().enumerate() {
                             let mut child_path = path.clone();
