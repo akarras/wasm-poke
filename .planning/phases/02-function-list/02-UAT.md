@@ -1,5 +1,5 @@
 ---
-status: complete
+status: diagnosed
 phase: 02-function-list
 source: [02-01-SUMMARY.md, 02-02-SUMMARY.md, 02-03-SUMMARY.md]
 started: 2026-01-26T22:45:00Z
@@ -85,7 +85,10 @@ skipped: 0
   reason: "User reported: shift+G selects all of the rows in the middle, it seems to treat it like shift + clicking the bottom row"
   severity: major
   test: 10
-  root_cause: ""
-  artifacts: []
-  missing: []
+  root_cause: "In handle_keyboard(), shift modifier check at line 197 doesn't distinguish between 'shift as key modifier' (g→G) and 'shift as selection modifier' (extend range). Shift+G triggers both jump-to-bottom AND range selection."
+  artifacts:
+    - path: "src/gui/panels/function_list.rs"
+      issue: "Line 197 checks shift globally instead of per-key-type"
+  missing:
+    - "Track whether key was a jump (g/G/Home/End) vs navigation (j/k/arrows) and only extend selection for navigation keys"
   debug_session: ""

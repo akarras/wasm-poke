@@ -159,34 +159,37 @@ impl FunctionListPanel {
         let (shift, ctrl) = ctx.input(|i| (i.modifiers.shift, i.modifiers.ctrl || i.modifiers.command));
 
         // Determine new position based on key pressed
-        let new_pos = ctx.input(|i| {
-            // j or ArrowDown: move down 1
+        // Returns (new_position, is_navigation_key) where is_navigation_key means
+        // shift should extend selection (j/k/arrows), vs jump keys (g/G/Home/End)
+        // where shift is part of the key binding itself
+        let (new_pos, is_navigation) = ctx.input(|i| {
+            // j or ArrowDown: move down 1 (navigation - shift extends)
             if i.key_pressed(Key::J) || i.key_pressed(Key::ArrowDown) {
-                return Some(current_pos.saturating_add(1).min(filtered_count - 1));
+                return (Some(current_pos.saturating_add(1).min(filtered_count - 1)), true);
             }
-            // k or ArrowUp: move up 1
+            // k or ArrowUp: move up 1 (navigation - shift extends)
             if i.key_pressed(Key::K) || i.key_pressed(Key::ArrowUp) {
-                return Some(current_pos.saturating_sub(1));
+                return (Some(current_pos.saturating_sub(1)), true);
             }
-            // g (without shift) or Home: jump to top
+            // g (without shift) or Home: jump to top (jump - shift is NOT extend)
             if (i.key_pressed(Key::G) && !shift) || i.key_pressed(Key::Home) {
-                return Some(0);
+                return (Some(0), false);
             }
-            // G (with shift) or End: jump to bottom
+            // G (with shift) or End: jump to bottom (jump - shift is part of key binding)
             if (i.key_pressed(Key::G) && shift) || i.key_pressed(Key::End) {
-                return Some(filtered_count - 1);
+                return (Some(filtered_count - 1), false);
             }
-            // Ctrl+d: half-page down
+            // Ctrl+d: half-page down (navigation - shift extends)
             if i.key_pressed(Key::D) && ctrl {
                 let half_page = visible_rows / 2;
-                return Some(current_pos.saturating_add(half_page).min(filtered_count - 1));
+                return (Some(current_pos.saturating_add(half_page).min(filtered_count - 1)), true);
             }
-            // Ctrl+u: half-page up
+            // Ctrl+u: half-page up (navigation - shift extends)
             if i.key_pressed(Key::U) && ctrl {
                 let half_page = visible_rows / 2;
-                return Some(current_pos.saturating_sub(half_page));
+                return (Some(current_pos.saturating_sub(half_page)), true);
             }
-            None
+            (None, false)
         });
 
         // If position changed, update selection
@@ -194,7 +197,7 @@ impl FunctionListPanel {
             if new_pos != current_pos || selection.focus_index.is_none() {
                 let func_index = module.functions[self.cached_indices[new_pos]].index;
 
-                if shift {
+                if shift && is_navigation {
                     // Shift held: extend selection from last to new
                     if let Some(from) = selection.last_selected {
                         // Find from position in cached_indices
