@@ -9,6 +9,8 @@ pub enum TabKind {
     FunctionList,
     /// Call tree/graph panel - shows call relationships.
     CallTree,
+    /// Callers tree panel - shows which functions call the selected function.
+    Callers,
     /// Size tree panel - shows cumulative size breakdown.
     SizeTree,
     /// Inspector panel - shows WAT disassembly and source mapping.
@@ -21,6 +23,7 @@ impl TabKind {
         match self {
             TabKind::FunctionList => "Functions",
             TabKind::CallTree => "Call Graph",
+            TabKind::Callers => "Callers",
             TabKind::SizeTree => "Size Tree",
             TabKind::Inspector => "Inspector",
         }
