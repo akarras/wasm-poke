@@ -14,10 +14,10 @@ Requirements for the egui rewrite. Each maps to roadmap phases.
 
 ### List Views
 
-- [ ] **LIST-01**: Function list view with size sorting (descending by code size)
-- [ ] **LIST-02**: Filter/search by glob pattern (case-insensitive)
-- [ ] **LIST-03**: Name demangling for Rust symbols
-- [ ] **LIST-04**: Keyboard navigation (j/k/g/G vim-style)
+- [x] **LIST-01**: Function list view with size sorting (descending by code size)
+- [x] **LIST-02**: Filter/search by glob pattern (case-insensitive)
+- [x] **LIST-03**: Name demangling for Rust symbols
+- [x] **LIST-04**: Keyboard navigation (j/k/g/G vim-style)
 
 ### Call Graph
 
@@ -78,10 +78,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 |-------------|-------|--------|
 | FOUND-01 | Phase 1 | Complete |
 | FOUND-02 | Phase 1 | Complete |
-| LIST-01 | Phase 2 | Pending |
-| LIST-02 | Phase 2 | Pending |
-| LIST-03 | Phase 2 | Pending |
-| LIST-04 | Phase 2 | Pending |
+| LIST-01 | Phase 2 | Complete |
+| LIST-02 | Phase 2 | Complete |
+| LIST-03 | Phase 2 | Complete |
+| LIST-04 | Phase 2 | Complete |
 | CALL-01 | Phase 3 | Pending |
 | CALL-02 | Phase 3 | Pending |
 | CALL-03 | Phase 3 | Pending |
@@ -101,4 +101,4 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 ---
 *Requirements defined: 2026-01-26*
-*Last updated: 2026-01-26 after Phase 1 completion*
+*Last updated: 2026-01-26 after Phase 2 completion*

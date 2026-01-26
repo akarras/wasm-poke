@@ -62,9 +62,9 @@ Plans:
 **Plans:** 3 plans
 
 Plans:
-- [ ] 02-01-PLAN.md - Extend SelectionState for multi-select and add bytesize dependency
-- [ ] 02-02-PLAN.md - Implement FunctionListPanel with table, sorting, and filtering
-- [ ] 02-03-PLAN.md - Add keyboard navigation and multi-select click handling
+- [x] 02-01-PLAN.md - Extend SelectionState for multi-select and add bytesize dependency
+- [x] 02-02-PLAN.md - Implement FunctionListPanel with table, sorting, and filtering
+- [x] 02-03-PLAN.md - Add keyboard navigation and multi-select click handling
 
 **Notes:**
 - Use egui_extras TableBuilder for virtualization (handles 10K+ functions)
@@ -175,15 +175,15 @@ Plans:
 | Phase | Status | Requirements | Completion |
 |-------|--------|--------------|------------|
 | 1 - Foundation | Complete | FOUND-01, FOUND-02 | 100% |
-| 2 - Function List | Planned | LIST-01, LIST-02, LIST-03, LIST-04 | 0% |
+| 2 - Function List | Complete | LIST-01, LIST-02, LIST-03, LIST-04 | 100% |
 | 3 - Call Graph | Not Started | CALL-01, CALL-02, CALL-03, CALL-04 | 0% |
 | 4 - Inspector | Not Started | INSP-01, INSP-02, INSP-05 | 0% |
 | 5 - Navigation & Help | Not Started | INSP-03, INSP-04 | 0% |
 | 6 - Output Modes | Not Started | OUT-01, OUT-02 | 0% |
 
-**Overall:** 1/6 phases complete (17%)
+**Overall:** 2/6 phases complete (33%)
 
 ---
 *Roadmap created: 2026-01-26*
 *Last updated: 2026-01-26*
-*Phase 2 planned: 2026-01-26*
+*Phase 2 complete: 2026-01-26*
