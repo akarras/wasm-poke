@@ -216,7 +216,7 @@ impl InspectorPanel {
 
         // Header with function name
         ui.horizontal(|ui| {
-            ui.label(RichText::new("WAT Disassembly:").strong());
+            ui.label(RichText::new("Inspector:").strong());
             ui.label(&func_name);
         });
         ui.separator();
@@ -226,7 +226,62 @@ impl InspectorPanel {
         // Handle keyboard navigation
         let scroll_to = self.handle_keyboard(ctx, selection, line_count);
 
-        // Calculate visible area
+        // Update current source line based on cursor
+        self.cached_current_source_line = self.current_source_line(selection.instruction_cursor);
+
+        // Calculate total available dimensions
+        let available_width = ui.available_width();
+        let available_height = ui.available_height();
+
+        // Three-panel layout using horizontal with sized children
+        ui.horizontal(|ui| {
+            // Hex panel (~20% width)
+            let hex_width = available_width * 0.20;
+            ui.allocate_ui_with_layout(
+                egui::vec2(hex_width, available_height),
+                egui::Layout::top_down(egui::Align::LEFT),
+                |ui| {
+                    self.show_hex_panel(ui, selection.instruction_cursor);
+                },
+            );
+
+            ui.separator();
+
+            // WAT panel (~45% width)
+            let wat_width = available_width * 0.45;
+            ui.allocate_ui_with_layout(
+                egui::vec2(wat_width, available_height),
+                egui::Layout::top_down(egui::Align::LEFT),
+                |ui| {
+                    self.show_wat_panel(ui, selection, scroll_to, cache_updated);
+                },
+            );
+
+            ui.separator();
+
+            // Source panel (remaining width)
+            ui.allocate_ui_with_layout(
+                egui::vec2(ui.available_width(), available_height),
+                egui::Layout::top_down(egui::Align::LEFT),
+                |ui| {
+                    self.show_source_panel(ui);
+                },
+            );
+        });
+    }
+
+    /// Render the WAT disassembly panel.
+    fn show_wat_panel(
+        &self,
+        ui: &mut egui::Ui,
+        selection: &mut SelectionState,
+        scroll_to: Option<usize>,
+        cache_updated: bool,
+    ) {
+        ui.label(RichText::new("WAT").strong());
+        ui.separator();
+
+        let line_count = self.cached_wat_lines.len();
         let available_height = ui.available_height();
 
         // Create scroll area with WAT display
@@ -287,6 +342,161 @@ impl InspectorPanel {
                 }
             }
         });
+    }
+
+    /// Render the hex bytes panel.
+    fn show_hex_panel(&self, ui: &mut egui::Ui, cursor: usize) {
+        ui.label(RichText::new("Hex Bytes").strong());
+        ui.separator();
+
+        if self.cached_hex_bytes.is_empty() {
+            ui.label("No bytes");
+            return;
+        }
+
+        // Calculate byte range for current instruction
+        let highlight_range = self.instruction_byte_range(cursor);
+
+        let bytes_per_row = 8; // Narrow panel
+        let row_count = (self.cached_hex_bytes.len() + bytes_per_row - 1) / bytes_per_row;
+
+        ScrollArea::vertical()
+            .id_salt("hex_scroll")
+            .show_rows(ui, ROW_HEIGHT, row_count, |ui, row_range| {
+                for row_idx in row_range {
+                    let start = row_idx * bytes_per_row;
+                    let end = (start + bytes_per_row).min(self.cached_hex_bytes.len());
+                    let row_bytes = &self.cached_hex_bytes[start..end];
+
+                    ui.horizontal(|ui| {
+                        // Offset gutter
+                        ui.label(
+                            RichText::new(format!("{:04x}:", start))
+                                .monospace()
+                                .weak(),
+                        );
+
+                        // Hex bytes with highlighting
+                        for (i, byte) in row_bytes.iter().enumerate() {
+                            let byte_offset = start + i;
+                            let is_highlighted = highlight_range
+                                .as_ref()
+                                .map(|r| r.contains(&byte_offset))
+                                .unwrap_or(false);
+
+                            let text = RichText::new(format!("{:02x}", byte)).monospace();
+                            if is_highlighted {
+                                ui.label(text.background_color(ui.visuals().selection.bg_fill));
+                            } else {
+                                ui.label(text);
+                            }
+                        }
+                    });
+                }
+            });
+    }
+
+    /// Calculate the byte range for the current instruction.
+    fn instruction_byte_range(&self, cursor: usize) -> Option<std::ops::Range<usize>> {
+        let current = self.cached_wat_lines.get(cursor)?;
+        let next = self.cached_wat_lines.get(cursor + 1);
+
+        let start = current.offset;
+        let end = next.map(|n| n.offset).unwrap_or_else(|| {
+            // Last instruction: estimate 4 bytes or to end of bytes
+            (start + 4).min(self.cached_hex_bytes.len())
+        });
+
+        // Only return valid ranges
+        if start < end && start < self.cached_hex_bytes.len() {
+            Some(start..end)
+        } else {
+            None
+        }
+    }
+
+    /// Render the source code panel.
+    fn show_source_panel(&self, ui: &mut egui::Ui) {
+        // Header with file path
+        if let Some(ref path) = self.cached_source_path {
+            // Show just filename, not full path
+            let filename = std::path::Path::new(path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(path);
+            ui.label(RichText::new(format!("Source: {}", filename)).strong());
+        } else {
+            ui.label(RichText::new("Source").strong());
+        }
+        ui.separator();
+
+        // Handle no source info
+        if self.cached_source_lines.is_empty() {
+            ui.centered_and_justified(|ui| {
+                ui.label("No source info available");
+            });
+            return;
+        }
+
+        // Get current source line (1-indexed)
+        let current_line = self.cached_current_source_line;
+
+        let line_count = self.cached_source_lines.len();
+
+        ScrollArea::vertical()
+            .id_salt("source_scroll")
+            .show_rows(ui, ROW_HEIGHT, line_count, |ui, row_range| {
+                for line_idx in row_range {
+                    let line_num = line_idx + 1; // 1-indexed
+                    let is_highlighted = current_line == Some(line_num as u32);
+
+                    // Reserve space for the row
+                    let (rect, _response) = ui.allocate_exact_size(
+                        egui::vec2(ui.available_width(), ROW_HEIGHT),
+                        egui::Sense::hover(),
+                    );
+
+                    // Paint background highlight for current line
+                    if is_highlighted {
+                        ui.painter()
+                            .rect_filled(rect, 0.0, ui.visuals().selection.bg_fill);
+                    }
+
+                    // Line number gutter
+                    let gutter_text = format!("{:4} ", line_num);
+                    let gutter_pos = rect.left_top() + egui::vec2(2.0, 2.0);
+                    ui.painter().text(
+                        gutter_pos,
+                        egui::Align2::LEFT_TOP,
+                        &gutter_text,
+                        egui::FontId::monospace(14.0),
+                        ui.visuals().weak_text_color(),
+                    );
+
+                    // Source line text
+                    let line_text = self
+                        .cached_source_lines
+                        .get(line_idx)
+                        .map(|s| s.as_str())
+                        .unwrap_or("");
+
+                    let text_color = if is_highlighted {
+                        ui.visuals().strong_text_color()
+                    } else {
+                        ui.visuals().text_color()
+                    };
+
+                    // Position after gutter (5 chars * ~8px per char)
+                    let text_pos = rect.left_top() + egui::vec2(42.0, 2.0);
+                    ui.painter().text(
+                        text_pos,
+                        egui::Align2::LEFT_TOP,
+                        line_text,
+                        egui::FontId::monospace(14.0),
+                        text_color,
+                    );
+                }
+            });
     }
 }
 
