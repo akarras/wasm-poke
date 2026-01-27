@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use eframe::egui;
 use egui_dock::{DockArea, DockState, NodeIndex};
 
-use crate::gui::panels::{CallTreePanel, CallersTreePanel, FunctionListPanel, SizeTreePanel};
+use crate::gui::panels::{CallTreePanel, CallersTreePanel, FunctionListPanel, InspectorPanel, SizeTreePanel};
 use crate::gui::state::SelectionState;
 use crate::gui::tabs::TabKind;
 use wasm_poke::{CallGraph, WasmModuleInfo};
@@ -42,6 +42,8 @@ pub struct WasmPokeApp {
     callers_tree_panel: CallersTreePanel,
     /// Size tree panel state.
     size_tree_panel: SizeTreePanel,
+    /// Inspector panel state.
+    inspector_panel: InspectorPanel,
 
     // UI layout
     /// Dock state for the panel layout.
@@ -62,6 +64,7 @@ impl WasmPokeApp {
             call_tree_panel: CallTreePanel::new(),
             callers_tree_panel: CallersTreePanel::new(),
             size_tree_panel: SizeTreePanel::new(),
+            inspector_panel: InspectorPanel::new(),
             dock_state: Self::default_dock_state(),
         }
     }
@@ -168,8 +171,9 @@ impl eframe::App for WasmPokeApp {
             module: self.module.as_ref(),
             call_graph: self.call_graph.as_ref(),
             reverse_graph: self.reverse_graph.as_ref(),
-            wasm_path: self.wasm_path.as_deref(),
+            wasm_bytes: self.wasm_bytes.as_deref(),
             selection: &mut self.selection,
+            inspector_panel: &mut self.inspector_panel,
             function_list_panel: &mut self.function_list_panel,
             call_tree_panel: &mut self.call_tree_panel,
             callers_tree_panel: &mut self.callers_tree_panel,
@@ -192,8 +196,9 @@ pub struct WasmPokeTabViewer<'a> {
     module: Option<&'a WasmModuleInfo>,
     call_graph: Option<&'a CallGraph>,
     reverse_graph: Option<&'a HashMap<u32, Vec<u32>>>,
-    wasm_path: Option<&'a str>,
+    wasm_bytes: Option<&'a [u8]>,
     selection: &'a mut SelectionState,
+    inspector_panel: &'a mut InspectorPanel,
     function_list_panel: &'a mut FunctionListPanel,
     call_tree_panel: &'a mut CallTreePanel,
     callers_tree_panel: &'a mut CallersTreePanel,
@@ -262,7 +267,17 @@ impl egui_dock::TabViewer for WasmPokeTabViewer<'_> {
                 }
             }
             TabKind::Inspector => {
-                ui.label("Inspector (Phase 4)");
+                if let (Some(module), Some(wasm_bytes)) = (self.module, self.wasm_bytes) {
+                    self.inspector_panel.show(
+                        self.ctx,
+                        ui,
+                        module,
+                        wasm_bytes,
+                        self.selection,
+                    );
+                } else {
+                    ui.label("No file loaded. Use File -> Open to load a .wasm file.");
+                }
             }
         }
     }
