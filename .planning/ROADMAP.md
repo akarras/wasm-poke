@@ -128,9 +128,9 @@ Plans:
 **Plans:** 3 plans
 
 Plans:
-- [ ] 04-01-PLAN.md - Create InspectorPanel with WAT display and keyboard navigation
-- [ ] 04-02-PLAN.md - Add Hex panel and Source panel with highlighting
-- [ ] 04-03-PLAN.md - Implement synchronized scrolling and click navigation
+- [x] 04-01-PLAN.md - Create InspectorPanel with WAT display and keyboard navigation
+- [x] 04-02-PLAN.md - Add Hex panel and Source panel with highlighting
+- [x] 04-03-PLAN.md - Implement synchronized scrolling and click navigation
 
 **Notes:**
 - All three panels derive display position from single instruction_cursor in SelectionState
@@ -192,15 +192,15 @@ Plans:
 | 1 - Foundation | Complete | FOUND-01, FOUND-02 | 100% |
 | 2 - Function List | Complete | LIST-01, LIST-02, LIST-03, LIST-04 | 100% |
 | 3 - Call Graph | Complete | CALL-01, CALL-02, CALL-03, CALL-04 | 100% |
-| 4 - Inspector | Planned | INSP-01, INSP-02, INSP-05 | 0% |
+| 4 - Inspector | Complete | INSP-01, INSP-02, INSP-05 | 100% |
 | 5 - Navigation & Help | Not Started | INSP-03, INSP-04 | 0% |
 | 6 - Output Modes | Not Started | OUT-01, OUT-02 | 0% |
 
-**Overall:** 3/6 phases complete (50%)
+**Overall:** 4/6 phases complete (67%)
 
 ---
 *Roadmap created: 2026-01-26*
 *Last updated: 2026-01-26*
 *Phase 2 complete: 2026-01-26*
 *Phase 3 complete: 2026-01-26*
-*Phase 4 planned: 2026-01-26*
+*Phase 4 complete: 2026-01-26*

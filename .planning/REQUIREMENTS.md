@@ -28,11 +28,11 @@ Requirements for the egui rewrite. Each maps to roadmap phases.
 
 ### Inspector
 
-- [ ] **INSP-01**: Three-panel inspection view (hex bytes | WAT instructions | source code)
-- [ ] **INSP-02**: Synchronized cursor navigation across all three panels
+- [x] **INSP-01**: Three-panel inspection view (hex bytes | WAT instructions | source code)
+- [x] **INSP-02**: Synchronized cursor navigation across all three panels
 - [ ] **INSP-03**: Goto navigation from call instructions to target function
 - [ ] **INSP-04**: Instruction explanations (help text for each Wasm instruction)
-- [ ] **INSP-05**: Keyboard navigation with WAT panel as primary driver
+- [x] **INSP-05**: Keyboard navigation with WAT panel as primary driver
 
 ### Output
 
@@ -86,11 +86,11 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CALL-02 | Phase 3 | Complete |
 | CALL-03 | Phase 3 | Complete |
 | CALL-04 | Phase 3 | Complete |
-| INSP-01 | Phase 4 | Pending |
-| INSP-02 | Phase 4 | Pending |
+| INSP-01 | Phase 4 | Complete |
+| INSP-02 | Phase 4 | Complete |
 | INSP-03 | Phase 5 | Pending |
 | INSP-04 | Phase 5 | Pending |
-| INSP-05 | Phase 4 | Pending |
+| INSP-05 | Phase 4 | Complete |
 | OUT-01 | Phase 6 | Pending |
 | OUT-02 | Phase 6 | Pending |
 
@@ -101,4 +101,4 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 ---
 *Requirements defined: 2026-01-26*
-*Last updated: 2026-01-26 after Phase 3 completion*
+*Last updated: 2026-01-26 after Phase 4 completion*
