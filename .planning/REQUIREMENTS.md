@@ -21,10 +21,10 @@ Requirements for the egui rewrite. Each maps to roadmap phases.
 
 ### Call Graph
 
-- [ ] **CALL-01**: Call tree view showing function call relationships (entry to exit)
-- [ ] **CALL-02**: Size summary tree with cumulative bytes through call graph
-- [ ] **CALL-03**: Keyboard navigation for call tree (expand/collapse, navigate)
-- [ ] **CALL-04**: Filter/search in call tree view
+- [x] **CALL-01**: Call tree view showing function call relationships (entry to exit)
+- [x] **CALL-02**: Size summary tree with cumulative bytes through call graph
+- [x] **CALL-03**: Keyboard navigation for call tree (expand/collapse, navigate)
+- [x] **CALL-04**: Filter/search in call tree view
 
 ### Inspector
 
@@ -82,10 +82,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | LIST-02 | Phase 2 | Complete |
 | LIST-03 | Phase 2 | Complete |
 | LIST-04 | Phase 2 | Complete |
-| CALL-01 | Phase 3 | Pending |
-| CALL-02 | Phase 3 | Pending |
-| CALL-03 | Phase 3 | Pending |
-| CALL-04 | Phase 3 | Pending |
+| CALL-01 | Phase 3 | Complete |
+| CALL-02 | Phase 3 | Complete |
+| CALL-03 | Phase 3 | Complete |
+| CALL-04 | Phase 3 | Complete |
 | INSP-01 | Phase 4 | Pending |
 | INSP-02 | Phase 4 | Pending |
 | INSP-03 | Phase 5 | Pending |
@@ -101,4 +101,4 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 ---
 *Requirements defined: 2026-01-26*
-*Last updated: 2026-01-26 after Phase 2 completion*
+*Last updated: 2026-01-26 after Phase 3 completion*

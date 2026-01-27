@@ -95,10 +95,10 @@ Plans:
 **Plans:** 4 plans
 
 Plans:
-- [ ] 03-01-PLAN.md - Create CallTreePanel with tree rendering and expand/collapse
-- [ ] 03-02-PLAN.md - Create CallersTreePanel with reverse graph
-- [ ] 03-03-PLAN.md - Create SizeTreePanel with cumulative size and color intensity
-- [ ] 03-04-PLAN.md - Add keyboard navigation and filter to all tree panels
+- [x] 03-01-PLAN.md - Create CallTreePanel with tree rendering and expand/collapse
+- [x] 03-02-PLAN.md - Create CallersTreePanel with reverse graph
+- [x] 03-03-PLAN.md - Create SizeTreePanel with cumulative size and color intensity
+- [x] 03-04-PLAN.md - Add keyboard navigation and filter to all tree panels
 
 **Notes:**
 - Leverage existing CallGraph and unique_cumulative_size from model.rs
@@ -184,15 +184,15 @@ Plans:
 |-------|--------|--------------|------------|
 | 1 - Foundation | Complete | FOUND-01, FOUND-02 | 100% |
 | 2 - Function List | Complete | LIST-01, LIST-02, LIST-03, LIST-04 | 100% |
-| 3 - Call Graph | Planned | CALL-01, CALL-02, CALL-03, CALL-04 | 0% |
+| 3 - Call Graph | Complete | CALL-01, CALL-02, CALL-03, CALL-04 | 100% |
 | 4 - Inspector | Not Started | INSP-01, INSP-02, INSP-05 | 0% |
 | 5 - Navigation & Help | Not Started | INSP-03, INSP-04 | 0% |
 | 6 - Output Modes | Not Started | OUT-01, OUT-02 | 0% |
 
-**Overall:** 2/6 phases complete (33%)
+**Overall:** 3/6 phases complete (50%)
 
 ---
 *Roadmap created: 2026-01-26*
 *Last updated: 2026-01-26*
 *Phase 2 complete: 2026-01-26*
-*Phase 3 planned: 2026-01-26*
+*Phase 3 complete: 2026-01-26*

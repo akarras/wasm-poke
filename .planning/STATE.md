@@ -16,7 +16,7 @@
 **Plan:** 4 of 4 complete
 **Status:** Phase complete
 
-**Progress:** [########..] 80%
+**Progress:** [#####.....] 50%
 
 ### Phase 3 Success Criteria
 
