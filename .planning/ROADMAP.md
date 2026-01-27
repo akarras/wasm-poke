@@ -155,11 +155,12 @@ Plans:
 3. User can see help text explaining the current Wasm instruction (hover or panel)
 4. Help text covers all standard Wasm instructions (not just common ones)
 
-**Plans:** 2 plans
+**Plans:** 3 plans
 
 Plans:
 - [x] 05-01-PLAN.md - Add goto navigation with history stack
 - [x] 05-02-PLAN.md - Add instruction help tooltips on hover
+- [x] 05-03-PLAN.md - Gap closure: cursor restore and call target tooltips
 
 **Notes:**
 - Goto navigation pushes to a stack so user can "go back"
