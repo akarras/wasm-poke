@@ -16,6 +16,7 @@ use egui::collapsing_header::CollapsingState;
 use eframe::egui::{self, Key};
 
 use crate::gui::state::SelectionState;
+use crate::gui::tabs::TabKind;
 use wasm_poke::{function_matches, CallGraph, FunctionInfo, WasmModuleInfo};
 
 /// Maximum tree depth to prevent UI performance issues.
@@ -240,8 +241,10 @@ impl CallTreePanel {
                 );
             });
 
-        // Handle keyboard navigation after rendering
-        self.handle_keyboard(ctx, selection, &visible_nodes);
+        // Handle keyboard navigation after rendering (only if this tab is active)
+        if selection.active_tab == TabKind::CallTree {
+            self.handle_keyboard(ctx, selection, &visible_nodes);
+        }
     }
 
     /// Recursively render a tree node and its children.

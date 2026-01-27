@@ -11,6 +11,7 @@ use eframe::egui::{self, Key};
 use egui_extras::{Column, TableBuilder};
 
 use crate::gui::state::SelectionState;
+use crate::gui::tabs::TabKind;
 use wasm_poke::{function_matches, CallGraph, WasmModuleInfo};
 
 /// Row height for the virtualized table.
@@ -286,8 +287,12 @@ impl FunctionListPanel {
         let visible_rows = (available_height / ROW_HEIGHT).floor() as usize;
         let visible_rows = visible_rows.max(1);
 
-        // Handle keyboard navigation before building table
-        let scroll_to = self.handle_keyboard(ctx, selection, module, visible_rows);
+        // Handle keyboard navigation before building table (only if this tab is active)
+        let scroll_to = if selection.active_tab == TabKind::FunctionList {
+            self.handle_keyboard(ctx, selection, module, visible_rows)
+        } else {
+            None
+        };
 
         // Build table with optional scroll_to_row
         let mut table = TableBuilder::new(ui)

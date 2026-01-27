@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use eframe::egui::{self, Key, RichText, ScrollArea};
 
 use crate::gui::state::SelectionState;
+use crate::gui::tabs::TabKind;
 use wasm_poke::{
     disassemble_function_wat_lines, function_body_bytes, map_instr_to_source_fast,
     SourceLocation, WasmModuleInfo, WatLine,
@@ -263,8 +264,12 @@ impl InspectorPanel {
 
         let line_count = self.cached_wat_lines.len();
 
-        // Handle keyboard navigation
-        let keyboard_scroll = self.handle_keyboard(ctx, selection, line_count);
+        // Handle keyboard navigation (only if this tab is active)
+        let keyboard_scroll = if selection.active_tab == TabKind::Inspector {
+            self.handle_keyboard(ctx, selection, line_count)
+        } else {
+            None
+        };
 
         // Update current source line based on cursor
         self.cached_current_source_line = self.current_source_line(selection.instruction_cursor);

@@ -17,6 +17,7 @@ use egui::collapsing_header::CollapsingState;
 use eframe::egui::{self, Key};
 
 use crate::gui::state::SelectionState;
+use crate::gui::tabs::TabKind;
 use wasm_poke::{function_matches, unique_cumulative_size, CallGraph, FunctionInfo, WasmModuleInfo};
 
 /// Maximum tree depth to prevent UI performance issues.
@@ -255,8 +256,10 @@ impl SizeTreePanel {
                 );
             });
 
-        // Handle keyboard navigation after rendering
-        self.handle_keyboard(ctx, selection, &visible_nodes);
+        // Handle keyboard navigation after rendering (only if this tab is active)
+        if selection.active_tab == TabKind::SizeTree {
+            self.handle_keyboard(ctx, selection, &visible_nodes);
+        }
     }
 
     /// Calculate background color based on cumulative size relative to total.
