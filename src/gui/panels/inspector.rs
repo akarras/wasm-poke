@@ -35,6 +35,8 @@ pub struct InspectorPanel {
     cached_source_lines: Vec<String>,
     /// Current source line number (1-indexed, from DWARF).
     cached_current_source_line: Option<u32>,
+    /// Last cursor position that triggered scroll (to avoid redundant scrolls).
+    last_scrolled_cursor: Option<usize>,
 }
 
 impl InspectorPanel {
@@ -49,6 +51,7 @@ impl InspectorPanel {
             cached_source_path: None,
             cached_source_lines: Vec::new(),
             cached_current_source_line: None,
+            last_scrolled_cursor: None,
         }
     }
 
@@ -224,10 +227,27 @@ impl InspectorPanel {
         let line_count = self.cached_wat_lines.len();
 
         // Handle keyboard navigation
-        let scroll_to = self.handle_keyboard(ctx, selection, line_count);
+        let keyboard_scroll = self.handle_keyboard(ctx, selection, line_count);
 
         // Update current source line based on cursor
         self.cached_current_source_line = self.current_source_line(selection.instruction_cursor);
+
+        // Determine if we need to scroll (cursor changed from keyboard, click, or function change)
+        let scroll_to = if cache_updated {
+            // Function changed - always scroll to new cursor position (which is 0)
+            self.last_scrolled_cursor = Some(selection.instruction_cursor);
+            Some(selection.instruction_cursor)
+        } else if keyboard_scroll.is_some() {
+            // Keyboard navigation changed cursor
+            self.last_scrolled_cursor = Some(selection.instruction_cursor);
+            keyboard_scroll
+        } else if self.last_scrolled_cursor != Some(selection.instruction_cursor) {
+            // Click changed cursor (detected by mismatch)
+            self.last_scrolled_cursor = Some(selection.instruction_cursor);
+            Some(selection.instruction_cursor)
+        } else {
+            None
+        };
 
         // Calculate total available dimensions
         let available_width = ui.available_width();
@@ -241,7 +261,7 @@ impl InspectorPanel {
                 egui::vec2(hex_width, available_height),
                 egui::Layout::top_down(egui::Align::LEFT),
                 |ui| {
-                    self.show_hex_panel(ui, selection.instruction_cursor);
+                    self.show_hex_panel(ui, selection.instruction_cursor, scroll_to);
                 },
             );
 
@@ -253,7 +273,7 @@ impl InspectorPanel {
                 egui::vec2(wat_width, available_height),
                 egui::Layout::top_down(egui::Align::LEFT),
                 |ui| {
-                    self.show_wat_panel(ui, selection, scroll_to, cache_updated);
+                    self.show_wat_panel(ui, selection, scroll_to);
                 },
             );
 
@@ -264,7 +284,7 @@ impl InspectorPanel {
                 egui::vec2(ui.available_width(), available_height),
                 egui::Layout::top_down(egui::Align::LEFT),
                 |ui| {
-                    self.show_source_panel(ui);
+                    self.show_source_panel(ui, scroll_to);
                 },
             );
         });
@@ -276,7 +296,6 @@ impl InspectorPanel {
         ui: &mut egui::Ui,
         selection: &mut SelectionState,
         scroll_to: Option<usize>,
-        cache_updated: bool,
     ) {
         ui.label(RichText::new("WAT").strong());
         ui.separator();
@@ -289,11 +308,11 @@ impl InspectorPanel {
             .id_salt("wat_scroll")
             .max_height(available_height);
 
-        // Apply scroll_to_row if cursor changed via keyboard or cache updated
+        // Apply scroll offset if cursor changed (position row near top of view)
         if let Some(row) = scroll_to {
-            scroll_area = scroll_area.vertical_scroll_offset(row as f32 * ROW_HEIGHT);
-        } else if cache_updated && selection.instruction_cursor == 0 {
-            scroll_area = scroll_area.vertical_scroll_offset(0.0);
+            // Calculate offset that positions the row in view with some padding
+            let offset = (row as f32 * ROW_HEIGHT).max(0.0);
+            scroll_area = scroll_area.vertical_scroll_offset(offset);
         }
 
         scroll_area.show_rows(ui, ROW_HEIGHT, line_count, |ui, row_range| {
@@ -345,7 +364,7 @@ impl InspectorPanel {
     }
 
     /// Render the hex bytes panel.
-    fn show_hex_panel(&self, ui: &mut egui::Ui, cursor: usize) {
+    fn show_hex_panel(&self, ui: &mut egui::Ui, cursor: usize, scroll_to: Option<usize>) {
         ui.label(RichText::new("Hex Bytes").strong());
         ui.separator();
 
@@ -360,9 +379,19 @@ impl InspectorPanel {
         let bytes_per_row = 8; // Narrow panel
         let row_count = (self.cached_hex_bytes.len() + bytes_per_row - 1) / bytes_per_row;
 
-        ScrollArea::vertical()
-            .id_salt("hex_scroll")
-            .show_rows(ui, ROW_HEIGHT, row_count, |ui, row_range| {
+        // Calculate which hex row to scroll to based on highlighted byte range
+        let scroll_to_hex_row = scroll_to.and_then(|_| {
+            highlight_range.as_ref().map(|r| r.start / bytes_per_row)
+        });
+
+        let mut scroll_area = ScrollArea::vertical().id_salt("hex_scroll");
+
+        if let Some(row) = scroll_to_hex_row {
+            let offset = (row as f32 * ROW_HEIGHT).max(0.0);
+            scroll_area = scroll_area.vertical_scroll_offset(offset);
+        }
+
+        scroll_area.show_rows(ui, ROW_HEIGHT, row_count, |ui, row_range| {
                 for row_idx in row_range {
                     let start = row_idx * bytes_per_row;
                     let end = (start + bytes_per_row).min(self.cached_hex_bytes.len());
@@ -416,7 +445,7 @@ impl InspectorPanel {
     }
 
     /// Render the source code panel.
-    fn show_source_panel(&self, ui: &mut egui::Ui) {
+    fn show_source_panel(&self, ui: &mut egui::Ui, scroll_to: Option<usize>) {
         // Header with file path
         if let Some(ref path) = self.cached_source_path {
             // Show just filename, not full path
@@ -443,9 +472,19 @@ impl InspectorPanel {
 
         let line_count = self.cached_source_lines.len();
 
-        ScrollArea::vertical()
-            .id_salt("source_scroll")
-            .show_rows(ui, ROW_HEIGHT, line_count, |ui, row_range| {
+        // Scroll to current source line (convert 1-indexed to 0-indexed)
+        let scroll_to_source_row = scroll_to.and_then(|_| {
+            current_line.map(|l| (l.saturating_sub(1)) as usize)
+        });
+
+        let mut scroll_area = ScrollArea::vertical().id_salt("source_scroll");
+
+        if let Some(row) = scroll_to_source_row {
+            let offset = (row as f32 * ROW_HEIGHT).max(0.0);
+            scroll_area = scroll_area.vertical_scroll_offset(offset);
+        }
+
+        scroll_area.show_rows(ui, ROW_HEIGHT, line_count, |ui, row_range| {
                 for line_idx in row_range {
                     let line_num = line_idx + 1; // 1-indexed
                     let is_highlighted = current_line == Some(line_num as u32);
