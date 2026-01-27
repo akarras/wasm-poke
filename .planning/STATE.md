@@ -6,17 +6,17 @@
 
 **Core Value:** Developers can see exactly how their Rust code translates to Wasm instructions, with source mapping, so they can make informed performance decisions.
 
-**Current Focus:** Phase 4 Complete - Inspector Panel with Three-Panel View
+**Current Focus:** Phase 4 Complete - Inspector Panel with Synchronized Scrolling
 
 **Key Constraint:** Desktop only - no web/WASM target. Centralized state to prevent sync bugs.
 
 ## Current Position
 
 **Phase:** 4 of 6 (Inspector Panel)
-**Plan:** 2 of 2 complete
+**Plan:** 3 of 3 complete
 **Status:** Phase complete
 
-**Progress:** [#######...] 70%
+**Progress:** [########..] 75%
 
 ### Phase 4 Success Criteria
 
@@ -26,6 +26,8 @@
 - [x] User can see hex dump of function body
 - [x] User can see source code if DWARF info present
 - [x] All three panels sync on cursor position
+- [x] Click-to-navigate in WAT and source panels
+- [x] Synchronized scrolling across all panels
 
 ### Active Requirements
 
@@ -37,16 +39,18 @@
 | INSP-04 | Hex dump panel | Complete |
 | INSP-05 | Source panel with DWARF | Complete |
 | INSP-06 | Three-panel sync | Complete |
+| INSP-07 | Click-to-navigate | Complete |
+| INSP-08 | Synchronized scrolling | Complete |
 
 ## Performance Metrics
 
-**Plans Completed:** 12
+**Plans Completed:** 13
 **Plans Total:** ~14 (across 6 phases)
 **Verification Pass Rate:** 100%
 **Phase 1 Duration:** 11 min (01-01: 5 min, 01-02: 6 min)
 **Phase 2 Duration:** 13 min (02-01: 3 min, 02-02: 6 min, 02-03: 4 min)
 **Phase 3 Duration:** 26 min (03-01: 5 min, 03-02: 5 min, 03-03: 8 min, 03-04: 8 min)
-**Phase 4 Duration:** 6 min (04-01: 4 min, 04-02: 2 min)
+**Phase 4 Duration:** 11 min (04-01: 4 min, 04-02: 2 min, 04-03: 5 min)
 
 ## Accumulated Context
 
@@ -84,6 +88,9 @@
 | Primary source file by frequency | Count DWARF mappings to determine dominant source file | 04-02 |
 | Cache source files in HashMap | Avoid repeated filesystem reads for same source file | 04-02 |
 | Instruction byte range from offsets | Use WatLine.offset differences to determine byte ranges for highlighting | 04-02 |
+| Hex panel display-only | Click-to-navigate from bytes is complex (reverse-map offset to instruction) and low-value | 04-03 |
+| N:1 indicator as asterisk | Simple gutter asterisk (*) when highlighted line maps to multiple WAT instructions | 04-03 |
+| Use vertical_scroll_offset | egui 0.33 doesn't have scroll_to_row; use (row * ROW_HEIGHT) calculation | 04-03 |
 
 ### Technical Debt
 
@@ -110,6 +117,7 @@ None.
 - [x] Run `/gsd:plan-phase 4` to create Phase 4 execution plan (Inspector Panel)
 - [x] Execute Plan 04-01 (WAT Panel foundation)
 - [x] Execute Plan 04-02 (Hex Panel and Source Panel)
+- [x] Execute Plan 04-03 (Synchronized scrolling and click navigation)
 - [ ] Run `/gsd:plan-phase 5` to create Phase 5 execution plan (Export/Stats)
 - [ ] Run `/gsd:plan-phase 6` to create Phase 6 execution plan (Polish)
 
@@ -118,14 +126,13 @@ None.
 ### Last Session
 
 **Date:** 2026-01-27
-**Accomplished:** Completed Plan 04-02 (Hex Panel and Source Panel)
-  - Added source file caching infrastructure
-  - Implemented three-panel layout (hex, WAT, source)
-  - Hex panel with offset gutter and byte highlighting
-  - Source panel with line numbers and line highlighting
-  - All panels sync on instruction cursor position
-  - Missing DWARF shows graceful message
-**Stopped At:** Plan 04-02 complete, Phase 4 complete
+**Accomplished:** Completed Plan 04-03 (Synchronized Scrolling and Click Navigation)
+  - Synchronized auto-scroll across all three panels
+  - Click-to-navigate in WAT panel (sets cursor)
+  - Click-to-navigate in source panel (jumps to first WAT instruction)
+  - N:1 mapping indicator (asterisk in gutter)
+  - Edge case handling (empty function, cursor bounds)
+**Stopped At:** Plan 04-03 complete, Phase 4 complete
 
 ### Next Session
 
@@ -150,7 +157,7 @@ None.
 | src/gui/panels/call_tree.rs | CallTreePanel with keyboard nav + filter |
 | src/gui/panels/callers_tree.rs | CallersTreePanel with keyboard nav + filter |
 | src/gui/panels/size_tree.rs | SizeTreePanel with keyboard nav + filter |
-| src/gui/panels/inspector.rs | InspectorPanel with three-panel view |
+| src/gui/panels/inspector.rs | InspectorPanel with synchronized three-panel view |
 | src/main.rs | egui entry point |
 
 ---
@@ -167,4 +174,5 @@ None.
 *Phase 3 completed: 2026-01-26*
 *Plan 04-01 completed: 2026-01-26*
 *Plan 04-02 completed: 2026-01-27*
+*Plan 04-03 completed: 2026-01-27*
 *Phase 4 completed: 2026-01-27*
