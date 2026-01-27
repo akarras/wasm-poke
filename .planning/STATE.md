@@ -6,14 +6,14 @@
 
 **Core Value:** Developers can see exactly how their Rust code translates to Wasm instructions, with source mapping, so they can make informed performance decisions.
 
-**Current Focus:** Phase 4 Complete - Inspector Panel with Synchronized Scrolling
+**Current Focus:** Phase 4 Complete - Inspector Panel with Focus Isolation Fix
 
 **Key Constraint:** Desktop only - no web/WASM target. Centralized state to prevent sync bugs.
 
 ## Current Position
 
 **Phase:** 4 of 6 (Inspector Panel)
-**Plan:** 3 of 3 complete
+**Plan:** 4 of 4 complete (gap closure)
 **Status:** Phase complete
 
 **Progress:** [########..] 75%
@@ -44,13 +44,13 @@
 
 ## Performance Metrics
 
-**Plans Completed:** 13
+**Plans Completed:** 14
 **Plans Total:** ~14 (across 6 phases)
 **Verification Pass Rate:** 100%
 **Phase 1 Duration:** 11 min (01-01: 5 min, 01-02: 6 min)
 **Phase 2 Duration:** 13 min (02-01: 3 min, 02-02: 6 min, 02-03: 4 min)
 **Phase 3 Duration:** 26 min (03-01: 5 min, 03-02: 5 min, 03-03: 8 min, 03-04: 8 min)
-**Phase 4 Duration:** 11 min (04-01: 4 min, 04-02: 2 min, 04-03: 5 min)
+**Phase 4 Duration:** 14 min (04-01: 4 min, 04-02: 2 min, 04-03: 5 min, 04-04: 3 min)
 
 ## Accumulated Context
 
@@ -91,6 +91,8 @@
 | Hex panel display-only | Click-to-navigate from bytes is complex (reverse-map offset to instruction) and low-value | 04-03 |
 | N:1 indicator as asterisk | Simple gutter asterisk (*) when highlighted line maps to multiple WAT instructions | 04-03 |
 | Use vertical_scroll_offset | egui 0.33 doesn't have scroll_to_row; use (row * ROW_HEIGHT) calculation | 04-03 |
+| Track active_tab in SelectionState | Centralized state for keyboard focus isolation | 04-04 |
+| Click detection for tab activation | ui_contains_pointer + any_click works with egui_dock | 04-04 |
 
 ### Technical Debt
 
@@ -118,6 +120,7 @@ None.
 - [x] Execute Plan 04-01 (WAT Panel foundation)
 - [x] Execute Plan 04-02 (Hex Panel and Source Panel)
 - [x] Execute Plan 04-03 (Synchronized scrolling and click navigation)
+- [x] Execute Plan 04-04 (Keyboard focus isolation fix)
 - [ ] Run `/gsd:plan-phase 5` to create Phase 5 execution plan (Export/Stats)
 - [ ] Run `/gsd:plan-phase 6` to create Phase 6 execution plan (Polish)
 
@@ -126,13 +129,12 @@ None.
 ### Last Session
 
 **Date:** 2026-01-27
-**Accomplished:** Completed Plan 04-03 (Synchronized Scrolling and Click Navigation)
-  - Synchronized auto-scroll across all three panels
-  - Click-to-navigate in WAT panel (sets cursor)
-  - Click-to-navigate in source panel (jumps to first WAT instruction)
-  - N:1 mapping indicator (asterisk in gutter)
-  - Edge case handling (empty function, cursor bounds)
-**Stopped At:** Plan 04-03 complete, Phase 4 complete
+**Accomplished:** Completed Plan 04-04 (Keyboard Focus Isolation)
+  - Added active_tab field to SelectionState
+  - Track active tab when user clicks in panel area
+  - Gate keyboard handling in all panels by active_tab
+  - Fixes j/k affecting all panels simultaneously
+**Stopped At:** Plan 04-04 complete, Phase 4 UAT issue resolved
 
 ### Next Session
 
@@ -175,4 +177,5 @@ None.
 *Plan 04-01 completed: 2026-01-26*
 *Plan 04-02 completed: 2026-01-27*
 *Plan 04-03 completed: 2026-01-27*
+*Plan 04-04 completed: 2026-01-27*
 *Phase 4 completed: 2026-01-27*
