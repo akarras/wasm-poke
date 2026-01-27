@@ -194,6 +194,45 @@ pub fn get_instruction_help(mnemonic: &str) -> Option<&'static str> {
         "f32.reinterpret_i32" => Some("Pops an i32. Pushes its bits reinterpreted as f32."),
         "f64.reinterpret_i64" => Some("Pops an i64. Pushes its bits reinterpreted as f64."),
 
-        _ => None,
+        // Extended integer operations (sign-extension)
+        "i32.extend8_s" => Some("Pops an i32. Sign-extends from 8 bits to 32 bits."),
+        "i32.extend16_s" => Some("Pops an i32. Sign-extends from 16 bits to 32 bits."),
+        "i64.extend8_s" => Some("Pops an i64. Sign-extends from 8 bits to 64 bits."),
+        "i64.extend16_s" => Some("Pops an i64. Sign-extends from 16 bits to 64 bits."),
+        "i64.extend32_s" => Some("Pops an i64. Sign-extends from 32 bits to 64 bits."),
+
+        // Saturating truncation (nontrapping)
+        "i32.trunc_sat_f32_s" => Some("Pops an f32. Truncates to i32 (signed), saturating on overflow."),
+        "i32.trunc_sat_f32_u" => Some("Pops an f32. Truncates to i32 (unsigned), saturating on overflow."),
+        "i32.trunc_sat_f64_s" => Some("Pops an f64. Truncates to i32 (signed), saturating on overflow."),
+        "i32.trunc_sat_f64_u" => Some("Pops an f64. Truncates to i32 (unsigned), saturating on overflow."),
+        "i64.trunc_sat_f32_s" => Some("Pops an f32. Truncates to i64 (signed), saturating on overflow."),
+        "i64.trunc_sat_f32_u" => Some("Pops an f32. Truncates to i64 (unsigned), saturating on overflow."),
+        "i64.trunc_sat_f64_s" => Some("Pops an f64. Truncates to i64 (signed), saturating on overflow."),
+        "i64.trunc_sat_f64_u" => Some("Pops an f64. Truncates to i64 (unsigned), saturating on overflow."),
+
+        // Reference types
+        "ref.null" => Some("Pushes a null reference of the specified type."),
+        "ref.is_null" => Some("Pops a reference. Pushes 1 if null, 0 otherwise."),
+        "ref.func" => Some("Creates a reference to the specified function."),
+
+        // Table operations
+        "table.get" => Some("Gets an element from a table at the given index."),
+        "table.set" => Some("Sets an element in a table at the given index."),
+        "table.size" => Some("Pushes the current size of a table."),
+        "table.grow" => Some("Grows a table by a given number of elements."),
+        "table.fill" => Some("Fills a table range with a value."),
+        "table.copy" => Some("Copies elements between tables."),
+        "table.init" => Some("Copies elements from a passive element segment to a table."),
+
+        // Bulk memory operations
+        "memory.copy" => Some("Copies bytes within memory."),
+        "memory.fill" => Some("Fills a memory region with a byte value."),
+        "memory.init" => Some("Copies bytes from a passive data segment to memory."),
+        "data.drop" => Some("Discards a passive data segment."),
+        "elem.drop" => Some("Discards a passive element segment."),
+
+        // Catch-all for unknown instructions
+        _ => Some("Unknown WebAssembly instruction. See spec for details."),
     }
 }
