@@ -502,12 +502,24 @@ impl InspectorPanel {
                     ui.visuals().text_color()
                 };
 
+                // Build display text, appending function name for call instructions
+                let display_text = if let Some(target) = extract_call_target(&line.text) {
+                    if let Some(target_func) = module.functions.iter().find(|f| f.index == target) {
+                        format!("{}  ;; {}", line.text, target_func.best_name())
+                    } else {
+                        // Import - show index since we don't have the name
+                        format!("{}  ;; import[{}]", line.text, target)
+                    }
+                } else {
+                    line.text.clone()
+                };
+
                 // Position text within the row
                 let text_pos = rect.left_top() + egui::vec2(4.0, 2.0);
                 ui.painter().text(
                     text_pos,
                     egui::Align2::LEFT_TOP,
-                    &line.text,
+                    &display_text,
                     egui::FontId::monospace(14.0),
                     text_color,
                 );
