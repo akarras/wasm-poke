@@ -6,50 +6,47 @@
 
 **Core Value:** Developers can see exactly how their Rust code translates to Wasm instructions, with source mapping, so they can make informed performance decisions.
 
-**Current Focus:** Phase 3 Complete - All Call Graph Views with Keyboard Nav and Filtering
+**Current Focus:** Phase 4 In Progress - Inspector Panel with WAT Display
 
 **Key Constraint:** Desktop only - no web/WASM target. Centralized state to prevent sync bugs.
 
 ## Current Position
 
-**Phase:** 3 of 6 (Call Graph Views)
-**Plan:** 4 of 4 complete
-**Status:** Phase complete
+**Phase:** 4 of 6 (Inspector Panel)
+**Plan:** 1 of 3 complete
+**Status:** In progress
 
-**Progress:** [#####.....] 50%
+**Progress:** [######....] 60%
 
-### Phase 3 Success Criteria
+### Phase 4 Success Criteria
 
-- [x] User can see Call Tree tab displaying downstream calls for selected function
-- [x] Tree expand/collapse works
-- [x] Recursive calls handled gracefully (no infinite loops, shows marker)
-- [x] Selection syncs bidirectionally between function list and call tree
-- [x] User can see Callers Tree tab (upstream calls)
-- [x] User can see Size Tree tab (cumulative size impact)
-- [x] User can navigate trees with j/k/arrows keys
-- [x] User can filter trees by typing in search box
-- [x] Filter shows only matching nodes and ancestors
+- [x] User can see WAT disassembly for selected function
+- [x] User can navigate instructions with j/k keys
+- [x] Current instruction is visually highlighted
+- [ ] User can see hex dump of function body
+- [ ] User can see source code if DWARF info present
+- [ ] All three panels sync on cursor position
 
 ### Active Requirements
 
 | ID | Requirement | Status |
 |----|-------------|--------|
-| TREE-01 | Call Tree with expand/collapse | Complete |
-| TREE-02 | Cycle detection with marker | Complete |
-| TREE-03 | Depth limit of 5 levels | Complete |
-| TREE-04 | Callers Tree (upstream) | Complete |
-| TREE-05 | Size Tree (cumulative) | Complete |
-| TREE-06 | Keyboard navigation (j/k/arrows) | Complete |
-| TREE-07 | Filter search with highlighting | Complete |
+| INSP-01 | WAT disassembly display | Complete |
+| INSP-02 | Keyboard navigation (j/k/g/G) | Complete |
+| INSP-03 | Visual line highlighting | Complete |
+| INSP-04 | Hex dump panel | Pending |
+| INSP-05 | Source panel with DWARF | Pending |
+| INSP-06 | Three-panel sync | Pending |
 
 ## Performance Metrics
 
-**Plans Completed:** 10
-**Plans Total:** ~13 (across 6 phases)
+**Plans Completed:** 11
+**Plans Total:** ~14 (across 6 phases)
 **Verification Pass Rate:** 100%
 **Phase 1 Duration:** 11 min (01-01: 5 min, 01-02: 6 min)
 **Phase 2 Duration:** 13 min (02-01: 3 min, 02-02: 6 min, 02-03: 4 min)
 **Phase 3 Duration:** 26 min (03-01: 5 min, 03-02: 5 min, 03-03: 8 min, 03-04: 8 min)
+**Phase 4 Duration:** 4 min (04-01: 4 min)
 
 ## Accumulated Context
 
@@ -81,6 +78,9 @@
 | Focus path as Vec<(u32, usize)> | Unique node identification for keyboard navigation | 03-04 |
 | handle_keyboard pattern | Consistent tree navigation across all panels | 03-04 |
 | subtree_contains_match | Recursive filter with ancestor visibility | 03-04 |
+| Cache on selection change | Update WAT cache only when func_index changes; avoids redundant disassembly | 04-01 |
+| Reset cursor on function change | Reset instruction_cursor to 0 when function changes; prevents stale position | 04-01 |
+| Click to position cursor | Clicking a line sets instruction_cursor; intuitive mouse interaction | 04-01 |
 
 ### Technical Debt
 
@@ -104,26 +104,28 @@ None.
 - [x] Execute Plan 03-02 (Callers Tree panel)
 - [x] Execute Plan 03-03 (Size Tree panel)
 - [x] Execute Plan 03-04 (Keyboard nav + filter for trees)
-- [ ] Run `/gsd:plan-phase 4` to create Phase 4 execution plan (Inspector Panel)
+- [x] Run `/gsd:plan-phase 4` to create Phase 4 execution plan (Inspector Panel)
+- [x] Execute Plan 04-01 (WAT Panel foundation)
+- [ ] Execute Plan 04-02 (Hex Panel)
+- [ ] Execute Plan 04-03 (Source Panel + sync)
 
 ## Session Continuity
 
 ### Last Session
 
 **Date:** 2026-01-26
-**Accomplished:** Completed Plan 03-04 (Keyboard navigation and filtering)
-  - Added focus_path tracking for keyboard-navigated nodes
-  - Implemented j/k/arrows/Enter/Space/g/G for tree navigation
-  - Added filter UI with TextEdit at top of each tree panel
-  - Filter shows matching nodes and ancestors with highlighting
-  - Focus indicator with light blue border stroke
-  - Synced CollapsingState with SelectionState.expanded_nodes
-**Stopped At:** Phase 3 fully complete, ready for Phase 4
+**Accomplished:** Completed Plan 04-01 (WAT Panel foundation)
+  - Created InspectorPanel with cached WAT disassembly
+  - Implemented vim-style keyboard navigation (j/k/g/G)
+  - Added visual line highlighting using selection.bg_fill
+  - Click to set cursor position
+  - Wired into app.rs with wasm_bytes pass-through
+**Stopped At:** Plan 04-01 complete, ready for 04-02
 
 ### Next Session
 
-**Start With:** Run `/gsd:plan-phase 4` to plan Inspector Panel
-**Context Needed:** WAT disassembly from lib.rs, source mapping functions
+**Start With:** Execute Plan 04-02 (Hex Panel)
+**Context Needed:** Three-panel layout, cursor sync between WAT and hex
 
 ### Important Files
 
@@ -143,6 +145,7 @@ None.
 | src/gui/panels/call_tree.rs | CallTreePanel with keyboard nav + filter |
 | src/gui/panels/callers_tree.rs | CallersTreePanel with keyboard nav + filter |
 | src/gui/panels/size_tree.rs | SizeTreePanel with keyboard nav + filter |
+| src/gui/panels/inspector.rs | InspectorPanel with WAT display + keyboard nav |
 | src/main.rs | egui entry point |
 
 ---
@@ -157,3 +160,4 @@ None.
 *Plan 03-03 completed: 2026-01-26*
 *Plan 03-04 completed: 2026-01-26*
 *Phase 3 completed: 2026-01-26*
+*Plan 04-01 completed: 2026-01-26*
