@@ -420,7 +420,7 @@ impl InspectorPanel {
                 egui::vec2(wat_width, available_height),
                 egui::Layout::top_down(egui::Align::LEFT),
                 |ui| {
-                    self.show_wat_panel(ui, selection, scroll_to);
+                    self.show_wat_panel(ui, selection, scroll_to, module);
                 },
             );
 
@@ -443,6 +443,7 @@ impl InspectorPanel {
         ui: &mut egui::Ui,
         selection: &mut SelectionState,
         scroll_to: Option<usize>,
+        module: &WasmModuleInfo,
     ) {
         ui.label(RichText::new("WAT").strong());
         ui.separator();
@@ -516,8 +517,16 @@ impl InspectorPanel {
                     selection.instruction_cursor = row_idx;
                 }
 
-                // Add instruction help on hover
-                if let Some(mnemonic) = extract_mnemonic(&line.text) {
+                // Add instruction help or call target info on hover
+                if let Some(target) = extract_call_target(&line.text) {
+                    // Show call target function name instead of generic "call" help
+                    if let Some(target_func) = module.functions.iter().find(|f| f.index == target) {
+                        response.on_hover_text(format!("-> {}", target_func.best_name()));
+                    } else {
+                        // Call to import (not in our function list)
+                        response.on_hover_text(format!("-> import func[{}]", target));
+                    }
+                } else if let Some(mnemonic) = extract_mnemonic(&line.text) {
                     if let Some(help_text) = get_instruction_help(mnemonic) {
                         response.on_hover_text(help_text);
                     }
