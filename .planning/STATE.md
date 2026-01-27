@@ -1,47 +1,50 @@
 # Project State: wasm-poke egui rewrite
 
-**Last Updated:** 2026-01-27
+**Last Updated:** 2026-01-26
 
 ## Project Reference
 
 **Core Value:** Developers can see exactly how their Rust code translates to Wasm instructions, with source mapping, so they can make informed performance decisions.
 
-**Current Focus:** Phase 5 Complete - Navigation & Help
+**Current Focus:** Phase 6 In Progress - Output Modes
 
 **Key Constraint:** Desktop only - no web/WASM target. Centralized state to prevent sync bugs.
 
 ## Current Position
 
-**Phase:** 5 of 6 (Navigation & Help)
-**Plan:** 3 of 3 complete (including gap closure)
-**Status:** Phase complete, verified
+**Phase:** 6 of 6 (Output Modes)
+**Plan:** 1 of 2 complete
+**Status:** In progress
 
-**Progress:** [########░░] 83%
+**Progress:** [#########░] 90%
 
-### Phase 5 Success Criteria
+### Phase 6 Success Criteria
 
-- [x] User can press Enter on a call instruction and navigate to the called function
-- [x] User can return to previous function after goto (navigation history)
-- [x] User can see help text explaining the current Wasm instruction (hover tooltip)
-- [x] Help text covers all standard Wasm instructions (130+ with fallback)
+- [x] CLI argument parsing with --json and --summary flags
+- [x] JSON output generation for module info and call graph
+- [x] Summary output generation with function list
+- [ ] Mode dispatch in main.rs (Plan 02)
+- [ ] Headless mode runs without GUI dependencies
 
 ### Active Requirements
 
 | ID | Requirement | Status |
 |----|-------------|--------|
-| INSP-03 | Goto navigation from call instructions | Complete |
-| INSP-04 | Instruction explanations (help tooltips) | Complete |
+| OUT-01 | JSON output with call graph | Complete (module ready) |
+| OUT-02 | Summary output with function sizes | Complete (module ready) |
+| OUT-03 | Headless mode dispatch | Pending (Plan 02) |
 
 ## Performance Metrics
 
-**Plans Completed:** 17
-**Plans Total:** ~19 (across 6 phases)
+**Plans Completed:** 18
+**Plans Total:** ~20 (across 6 phases)
 **Verification Pass Rate:** 100%
 **Phase 1 Duration:** 11 min (01-01: 5 min, 01-02: 6 min)
 **Phase 2 Duration:** 13 min (02-01: 3 min, 02-02: 6 min, 02-03: 4 min)
 **Phase 3 Duration:** 26 min (03-01: 5 min, 03-02: 5 min, 03-03: 8 min, 03-04: 8 min)
 **Phase 4 Duration:** 14 min (04-01: 4 min, 04-02: 2 min, 04-03: 5 min, 04-04: 3 min)
 **Phase 5 Duration:** 10 min (05-01: 5 min, 05-02: 2 min, 05-03: 3 min) - gap closure
+**Phase 6 Duration:** 4 min (06-01: 4 min)
 
 ## Accumulated Context
 
@@ -92,6 +95,9 @@
 | Clear history on clear_selection only | History persists across manual selections for usability | 05-01 |
 | navigated_back flag for cursor restore | Set flag before navigate_back(), check in update_cache() to skip cursor=0 | 05-03 |
 | Call target tooltip over generic help | Check for call target first, show function name instead of generic "call" help | 05-03 |
+| Clap group for mutual exclusion | --json and --summary use group="output_mode" for mutual exclusion | 06-01 |
+| OutputMode enum for dispatch | Clear enum-based dispatch pattern for headless vs GUI mode | 06-01 |
+| Top 20 functions in summary | Summary output shows top 20 functions by size with percentages | 06-01 |
 
 ### Technical Debt
 
@@ -124,23 +130,26 @@ None.
 - [x] Execute Plan 05-01 (Inspector navigation - Enter/Backspace)
 - [x] Execute Plan 05-02 (Instruction help tooltips)
 - [x] Execute Plan 05-03 (UAT gap closure - cursor restore + call tooltip)
-- [ ] Run `/gsd:plan-phase 6` to create Phase 6 execution plan (Output Modes)
+- [x] Run `/gsd:plan-phase 6` to create Phase 6 execution plan (Output Modes)
+- [x] Execute Plan 06-01 (CLI and output modules)
+- [ ] Execute Plan 06-02 (Mode dispatch integration)
 
 ## Session Continuity
 
 ### Last Session
 
-**Date:** 2026-01-27
-**Accomplished:** Completed Phase 5 UAT gap closure (Plan 05-03)
-  - Fixed cursor position restoration on back navigation
-  - Added call target function name tooltips
-  - All UAT gaps now closed
-**Stopped At:** Phase 5 fully complete with gaps closed
+**Date:** 2026-01-26
+**Accomplished:** Completed Plan 06-01 (CLI and Output Modules)
+  - Created src/cli.rs with Cli struct, OutputMode enum, clap derive
+  - Created src/output.rs with JsonOutput, output_json, output_summary
+  - Wired modules into main.rs
+  - Added 15 unit tests for CLI and output
+**Stopped At:** Plan 06-01 complete, ready for Plan 06-02
 
 ### Next Session
 
-**Start With:** Plan Phase 6 (Output Modes) - JSON and summary output
-**Context Needed:** Review Phase 6 requirements in ROADMAP.md
+**Start With:** Execute Plan 06-02 (Mode dispatch integration)
+**Context Needed:** src/cli.rs, src/output.rs, src/main.rs
 
 ### Important Files
 
@@ -151,6 +160,8 @@ None.
 | .planning/ROADMAP.md | Phase structure and success criteria |
 | .planning/research/SUMMARY.md | Architecture recommendations |
 | src/lib.rs | Analysis entry point (preserve) |
+| src/cli.rs | CLI argument parsing with clap derive |
+| src/output.rs | JSON and summary output generation |
 | src/gui/mod.rs | GUI module exports |
 | src/gui/app.rs | WasmPokeApp and eframe::App impl |
 | src/gui/state.rs | SelectionState with multi-select support |
@@ -161,7 +172,7 @@ None.
 | src/gui/panels/callers_tree.rs | CallersTreePanel with keyboard nav + filter |
 | src/gui/panels/size_tree.rs | SizeTreePanel with keyboard nav + filter |
 | src/gui/panels/inspector.rs | InspectorPanel with synchronized three-panel view |
-| src/main.rs | egui entry point |
+| src/main.rs | egui entry point with cli and output modules |
 
 ---
 *State initialized: 2026-01-26*
@@ -184,3 +195,4 @@ None.
 *Plan 05-02 completed: 2026-01-27*
 *Plan 05-03 completed: 2026-01-27*
 *Phase 5 completed: 2026-01-27*
+*Plan 06-01 completed: 2026-01-26*
