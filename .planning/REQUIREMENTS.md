@@ -36,8 +36,8 @@ Requirements for the egui rewrite. Each maps to roadmap phases.
 
 ### Output
 
-- [ ] **OUT-01**: JSON output mode for scripting
-- [ ] **OUT-02**: Summary text output without GUI
+- [x] **OUT-01**: JSON output mode for scripting
+- [x] **OUT-02**: Summary text output without GUI
 
 ## v2 Requirements
 
@@ -91,8 +91,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | INSP-03 | Phase 5 | Complete |
 | INSP-04 | Phase 5 | Complete |
 | INSP-05 | Phase 4 | Complete |
-| OUT-01 | Phase 6 | Pending |
-| OUT-02 | Phase 6 | Pending |
+| OUT-01 | Phase 6 | Complete |
+| OUT-02 | Phase 6 | Complete |
 
 **Coverage:**
 - v1 requirements: 17 total
@@ -101,4 +101,4 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 ---
 *Requirements defined: 2026-01-26*
-*Last updated: 2026-01-27 after Phase 5 completion*
+*Last updated: 2026-01-27 after Phase 6 completion - all v1 requirements complete*
