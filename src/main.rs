@@ -4,7 +4,9 @@
 
 use eframe::egui;
 
+mod cli;
 mod gui;
+mod output;
 
 use gui::WasmPokeApp;
 
