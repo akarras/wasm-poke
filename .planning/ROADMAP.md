@@ -158,8 +158,8 @@ Plans:
 **Plans:** 2 plans
 
 Plans:
-- [ ] 05-01-PLAN.md - Add goto navigation with history stack
-- [ ] 05-02-PLAN.md - Add instruction help tooltips on hover
+- [x] 05-01-PLAN.md - Add goto navigation with history stack
+- [x] 05-02-PLAN.md - Add instruction help tooltips on hover
 
 **Notes:**
 - Goto navigation pushes to a stack so user can "go back"
@@ -199,10 +199,10 @@ Plans:
 | 2 - Function List | Complete | LIST-01, LIST-02, LIST-03, LIST-04 | 100% |
 | 3 - Call Graph | Complete | CALL-01, CALL-02, CALL-03, CALL-04 | 100% |
 | 4 - Inspector | Complete | INSP-01, INSP-02, INSP-05 | 100% |
-| 5 - Navigation & Help | Planned | INSP-03, INSP-04 | 0% |
+| 5 - Navigation & Help | Complete | INSP-03, INSP-04 | 100% |
 | 6 - Output Modes | Not Started | OUT-01, OUT-02 | 0% |
 
-**Overall:** 4/6 phases complete (67%)
+**Overall:** 5/6 phases complete (83%)
 
 ---
 *Roadmap created: 2026-01-26*
@@ -210,4 +210,4 @@ Plans:
 *Phase 2 complete: 2026-01-26*
 *Phase 3 complete: 2026-01-26*
 *Phase 4 complete: 2026-01-26*
-*Phase 5 planned: 2026-01-27*
+*Phase 5 complete: 2026-01-27*

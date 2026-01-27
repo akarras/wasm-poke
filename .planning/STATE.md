@@ -6,52 +6,42 @@
 
 **Core Value:** Developers can see exactly how their Rust code translates to Wasm instructions, with source mapping, so they can make informed performance decisions.
 
-**Current Focus:** Phase 5 Plan 2 Complete - Instruction Help Tooltips
+**Current Focus:** Phase 5 Complete - Navigation & Help
 
 **Key Constraint:** Desktop only - no web/WASM target. Centralized state to prevent sync bugs.
 
 ## Current Position
 
 **Phase:** 5 of 6 (Navigation & Help)
-**Plan:** 2 of 3 complete (instruction tooltips)
-**Status:** In progress
+**Plan:** 2 of 2 complete
+**Status:** Phase complete
 
-**Progress:** [########..] 80%
+**Progress:** [########░░] 83%
 
-### Phase 4 Success Criteria
+### Phase 5 Success Criteria
 
-- [x] User can see WAT disassembly for selected function
-- [x] User can navigate instructions with j/k keys
-- [x] Current instruction is visually highlighted
-- [x] User can see hex dump of function body
-- [x] User can see source code if DWARF info present
-- [x] All three panels sync on cursor position
-- [x] Click-to-navigate in WAT and source panels
-- [x] Synchronized scrolling across all panels
+- [x] User can press Enter on a call instruction and navigate to the called function
+- [x] User can return to previous function after goto (navigation history)
+- [x] User can see help text explaining the current Wasm instruction (hover tooltip)
+- [x] Help text covers all standard Wasm instructions (130+ with fallback)
 
 ### Active Requirements
 
 | ID | Requirement | Status |
 |----|-------------|--------|
-| INSP-01 | WAT disassembly display | Complete |
-| INSP-02 | Keyboard navigation (j/k/g/G) | Complete |
-| INSP-03 | Visual line highlighting | Complete |
-| INSP-04 | Hex dump panel | Complete |
-| INSP-05 | Source panel with DWARF | Complete |
-| INSP-06 | Three-panel sync | Complete |
-| INSP-07 | Click-to-navigate | Complete |
-| INSP-08 | Synchronized scrolling | Complete |
+| INSP-03 | Goto navigation from call instructions | Complete |
+| INSP-04 | Instruction explanations (help tooltips) | Complete |
 
 ## Performance Metrics
 
-**Plans Completed:** 14
-**Plans Total:** ~14 (across 6 phases)
+**Plans Completed:** 16
+**Plans Total:** ~18 (across 6 phases)
 **Verification Pass Rate:** 100%
 **Phase 1 Duration:** 11 min (01-01: 5 min, 01-02: 6 min)
 **Phase 2 Duration:** 13 min (02-01: 3 min, 02-02: 6 min, 02-03: 4 min)
 **Phase 3 Duration:** 26 min (03-01: 5 min, 03-02: 5 min, 03-03: 8 min, 03-04: 8 min)
 **Phase 4 Duration:** 14 min (04-01: 4 min, 04-02: 2 min, 04-03: 5 min, 04-04: 3 min)
-**Phase 5 Duration:** ~7 min so far (05-01: 5 min, 05-02: 2 min)
+**Phase 5 Duration:** 7 min (05-01: 5 min, 05-02: 2 min) - parallel execution
 
 ## Accumulated Context
 
@@ -131,25 +121,24 @@ None.
 - [x] Run `/gsd:plan-phase 5` to create Phase 5 execution plan (Navigation & Help)
 - [x] Execute Plan 05-01 (Inspector navigation - Enter/Backspace)
 - [x] Execute Plan 05-02 (Instruction help tooltips)
-- [ ] Execute Plan 05-03 (Keyboard shortcuts help panel)
-- [ ] Run `/gsd:plan-phase 6` to create Phase 6 execution plan (Polish)
+- [ ] Run `/gsd:plan-phase 6` to create Phase 6 execution plan (Output Modes)
 
 ## Session Continuity
 
 ### Last Session
 
 **Date:** 2026-01-27
-**Accomplished:** Completed Plan 05-02 (Instruction Help Tooltips)
-  - Extended help.rs with 35+ additional instructions
-  - Added fallback for unknown instructions
-  - Added extract_mnemonic helper to parse WAT text
-  - Added on_hover_text call in WAT panel
-**Stopped At:** Plan 05-02 complete, 2/3 Phase 5 plans done
+**Accomplished:** Completed Phase 5 (Navigation & Help)
+  - Plan 05-01: Goto navigation with history stack (Enter/Backspace)
+  - Plan 05-02: Instruction help tooltips on hover
+  - Both plans executed in parallel
+  - All success criteria verified
+**Stopped At:** Phase 5 complete, verified
 
 ### Next Session
 
-**Start With:** Plan 05-03 (Keyboard shortcuts help panel)
-**Context Needed:** Review 05-03-PLAN.md for help panel requirements
+**Start With:** Plan Phase 6 (Output Modes) - JSON and summary output
+**Context Needed:** Review Phase 6 requirements in ROADMAP.md
 
 ### Important Files
 
@@ -191,3 +180,4 @@ None.
 *Phase 4 completed: 2026-01-27*
 *Plan 05-01 completed: 2026-01-27*
 *Plan 05-02 completed: 2026-01-27*
+*Phase 5 completed: 2026-01-27*
