@@ -1,31 +1,31 @@
 # Project State: wasm-poke egui rewrite
 
-**Last Updated:** 2026-01-26
+**Last Updated:** 2026-01-27
 
 ## Project Reference
 
 **Core Value:** Developers can see exactly how their Rust code translates to Wasm instructions, with source mapping, so they can make informed performance decisions.
 
-**Current Focus:** Phase 4 In Progress - Inspector Panel with WAT Display
+**Current Focus:** Phase 4 Complete - Inspector Panel with Three-Panel View
 
 **Key Constraint:** Desktop only - no web/WASM target. Centralized state to prevent sync bugs.
 
 ## Current Position
 
 **Phase:** 4 of 6 (Inspector Panel)
-**Plan:** 1 of 3 complete
-**Status:** In progress
+**Plan:** 2 of 2 complete
+**Status:** Phase complete
 
-**Progress:** [######....] 60%
+**Progress:** [#######...] 70%
 
 ### Phase 4 Success Criteria
 
 - [x] User can see WAT disassembly for selected function
 - [x] User can navigate instructions with j/k keys
 - [x] Current instruction is visually highlighted
-- [ ] User can see hex dump of function body
-- [ ] User can see source code if DWARF info present
-- [ ] All three panels sync on cursor position
+- [x] User can see hex dump of function body
+- [x] User can see source code if DWARF info present
+- [x] All three panels sync on cursor position
 
 ### Active Requirements
 
@@ -34,19 +34,19 @@
 | INSP-01 | WAT disassembly display | Complete |
 | INSP-02 | Keyboard navigation (j/k/g/G) | Complete |
 | INSP-03 | Visual line highlighting | Complete |
-| INSP-04 | Hex dump panel | Pending |
-| INSP-05 | Source panel with DWARF | Pending |
-| INSP-06 | Three-panel sync | Pending |
+| INSP-04 | Hex dump panel | Complete |
+| INSP-05 | Source panel with DWARF | Complete |
+| INSP-06 | Three-panel sync | Complete |
 
 ## Performance Metrics
 
-**Plans Completed:** 11
+**Plans Completed:** 12
 **Plans Total:** ~14 (across 6 phases)
 **Verification Pass Rate:** 100%
 **Phase 1 Duration:** 11 min (01-01: 5 min, 01-02: 6 min)
 **Phase 2 Duration:** 13 min (02-01: 3 min, 02-02: 6 min, 02-03: 4 min)
 **Phase 3 Duration:** 26 min (03-01: 5 min, 03-02: 5 min, 03-03: 8 min, 03-04: 8 min)
-**Phase 4 Duration:** 4 min (04-01: 4 min)
+**Phase 4 Duration:** 6 min (04-01: 4 min, 04-02: 2 min)
 
 ## Accumulated Context
 
@@ -81,6 +81,9 @@
 | Cache on selection change | Update WAT cache only when func_index changes; avoids redundant disassembly | 04-01 |
 | Reset cursor on function change | Reset instruction_cursor to 0 when function changes; prevents stale position | 04-01 |
 | Click to position cursor | Clicking a line sets instruction_cursor; intuitive mouse interaction | 04-01 |
+| Primary source file by frequency | Count DWARF mappings to determine dominant source file | 04-02 |
+| Cache source files in HashMap | Avoid repeated filesystem reads for same source file | 04-02 |
+| Instruction byte range from offsets | Use WatLine.offset differences to determine byte ranges for highlighting | 04-02 |
 
 ### Technical Debt
 
@@ -106,26 +109,28 @@ None.
 - [x] Execute Plan 03-04 (Keyboard nav + filter for trees)
 - [x] Run `/gsd:plan-phase 4` to create Phase 4 execution plan (Inspector Panel)
 - [x] Execute Plan 04-01 (WAT Panel foundation)
-- [ ] Execute Plan 04-02 (Hex Panel)
-- [ ] Execute Plan 04-03 (Source Panel + sync)
+- [x] Execute Plan 04-02 (Hex Panel and Source Panel)
+- [ ] Run `/gsd:plan-phase 5` to create Phase 5 execution plan (Export/Stats)
+- [ ] Run `/gsd:plan-phase 6` to create Phase 6 execution plan (Polish)
 
 ## Session Continuity
 
 ### Last Session
 
-**Date:** 2026-01-26
-**Accomplished:** Completed Plan 04-01 (WAT Panel foundation)
-  - Created InspectorPanel with cached WAT disassembly
-  - Implemented vim-style keyboard navigation (j/k/g/G)
-  - Added visual line highlighting using selection.bg_fill
-  - Click to set cursor position
-  - Wired into app.rs with wasm_bytes pass-through
-**Stopped At:** Plan 04-01 complete, ready for 04-02
+**Date:** 2026-01-27
+**Accomplished:** Completed Plan 04-02 (Hex Panel and Source Panel)
+  - Added source file caching infrastructure
+  - Implemented three-panel layout (hex, WAT, source)
+  - Hex panel with offset gutter and byte highlighting
+  - Source panel with line numbers and line highlighting
+  - All panels sync on instruction cursor position
+  - Missing DWARF shows graceful message
+**Stopped At:** Plan 04-02 complete, Phase 4 complete
 
 ### Next Session
 
-**Start With:** Execute Plan 04-02 (Hex Panel)
-**Context Needed:** Three-panel layout, cursor sync between WAT and hex
+**Start With:** Plan Phase 5 (Export/Stats) or Phase 6 (Polish)
+**Context Needed:** Review remaining phases in ROADMAP.md
 
 ### Important Files
 
@@ -145,7 +150,7 @@ None.
 | src/gui/panels/call_tree.rs | CallTreePanel with keyboard nav + filter |
 | src/gui/panels/callers_tree.rs | CallersTreePanel with keyboard nav + filter |
 | src/gui/panels/size_tree.rs | SizeTreePanel with keyboard nav + filter |
-| src/gui/panels/inspector.rs | InspectorPanel with WAT display + keyboard nav |
+| src/gui/panels/inspector.rs | InspectorPanel with three-panel view |
 | src/main.rs | egui entry point |
 
 ---
@@ -161,3 +166,5 @@ None.
 *Plan 03-04 completed: 2026-01-26*
 *Phase 3 completed: 2026-01-26*
 *Plan 04-01 completed: 2026-01-26*
+*Plan 04-02 completed: 2026-01-27*
+*Phase 4 completed: 2026-01-27*
