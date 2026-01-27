@@ -49,6 +49,11 @@ pub struct SelectionState {
     /// Currently active tab (for keyboard focus isolation).
     /// Keyboard navigation only affects the panel in the active tab.
     pub active_tab: TabKind,
+
+    /// Navigation history stack for goto/back navigation.
+    /// Each entry is (function_index, instruction_cursor) to restore full position.
+    /// Limited to 50 entries to prevent unbounded memory growth.
+    pub navigation_history: Vec<(u32, usize)>,
 }
 
 impl SelectionState {
@@ -108,11 +113,37 @@ impl SelectionState {
         }
     }
 
-    /// Clear all selection state.
+    /// Clear all selection state (including navigation history).
     pub fn clear_selection(&mut self) {
         self.selected_functions.clear();
         self.last_selected = None;
         self.focus_index = None;
+        self.navigation_history.clear();
+    }
+
+    /// Push current position to navigation history before navigating away.
+    /// Caps history at 50 entries, dropping oldest when full.
+    pub fn push_navigation(&mut self, func_index: u32, cursor: usize) {
+        const MAX_HISTORY: usize = 50;
+        if self.navigation_history.len() >= MAX_HISTORY {
+            self.navigation_history.remove(0);
+        }
+        self.navigation_history.push((func_index, cursor));
+    }
+
+    /// Pop and navigate back to previous position.
+    /// Returns true if navigation happened, false if history was empty.
+    pub fn navigate_back(&mut self) -> bool {
+        if let Some((func_index, cursor)) = self.navigation_history.pop() {
+            self.selected_functions.clear();
+            self.selected_functions.insert(func_index);
+            self.last_selected = Some(func_index);
+            self.focus_index = Some(func_index);
+            self.instruction_cursor = cursor;
+            true
+        } else {
+            false
+        }
     }
 
     /// Check if a function is selected.
@@ -137,6 +168,7 @@ impl Default for SelectionState {
             instruction_cursor: 0,
             expanded_nodes: HashSet::new(),
             active_tab: TabKind::FunctionList, // Default to function list
+            navigation_history: Vec::new(),
         }
     }
 }
