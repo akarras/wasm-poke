@@ -112,7 +112,8 @@ impl WasmPokeApp {
     }
 
     /// Load and parse a Wasm file from a given path.
-    fn load_wasm_from_path(&mut self, path: PathBuf) {
+    pub fn load_wasm_from_path(&mut self, path: impl AsRef<std::path::Path>) {
+        let path = path.as_ref().to_path_buf();
         match wasm_poke::parse_wasm(&path) {
             Ok(module) => {
                 // Read bytes for call graph analysis
