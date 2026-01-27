@@ -11,12 +11,61 @@ use eframe::egui::{self, Key, RichText, ScrollArea};
 use crate::gui::state::SelectionState;
 use crate::gui::tabs::TabKind;
 use wasm_poke::{
-    disassemble_function_wat_lines, function_body_bytes, map_instr_to_source_fast,
-    SourceLocation, WasmModuleInfo, WatLine,
+    disassemble_function_wat_lines, function_body_bytes, help::get_instruction_help,
+    map_instr_to_source_fast, SourceLocation, WasmModuleInfo, WatLine,
 };
 
 /// Row height for WAT instruction lines.
 const ROW_HEIGHT: f32 = 18.0;
+
+/// Keyboard action result from handle_keyboard.
+enum KeyAction {
+    /// No action taken.
+    None,
+    /// Move cursor to a specific position.
+    MoveCursor(usize),
+    /// Navigate to call target (Enter pressed on call instruction).
+    GotoCall,
+    /// Navigate back to previous position (Backspace pressed).
+    GoBack,
+}
+
+/// Extract function index from a call instruction.
+/// Returns Some(index) for "call 123" style instructions.
+fn extract_call_target(wat_text: &str) -> Option<u32> {
+    let trimmed = wat_text.trim();
+    // Match "call N" but not "call_indirect"
+    if trimmed.starts_with("call ") && !trimmed.starts_with("call_indirect") {
+        trimmed.strip_prefix("call ")?.trim().parse().ok()
+    } else {
+        None
+    }
+}
+
+/// Extract the instruction mnemonic from WAT text for help lookup.
+/// Returns None for comments, syntax markers, and empty lines.
+fn extract_mnemonic(wat_text: &str) -> Option<&str> {
+    let trimmed = wat_text.trim();
+
+    // Skip comments
+    if trimmed.starts_with(";;") {
+        return None;
+    }
+
+    // Skip syntax markers like "(func", "(param", ")"
+    // But NOT "end" - that's a real instruction
+    if trimmed.starts_with('(') || trimmed == ")" {
+        return None;
+    }
+
+    // Skip empty lines
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    // Extract first word as mnemonic
+    trimmed.split_whitespace().next()
+}
 
 /// Panel for displaying WAT disassembly, hex bytes, and source code.
 pub struct InspectorPanel {
@@ -409,6 +458,13 @@ impl InspectorPanel {
                 // Handle click to set cursor
                 if response.clicked() {
                     selection.instruction_cursor = row_idx;
+                }
+
+                // Add instruction help on hover
+                if let Some(mnemonic) = extract_mnemonic(&line.text) {
+                    if let Some(help_text) = get_instruction_help(mnemonic) {
+                        response.on_hover_text(help_text);
+                    }
                 }
             }
         });
