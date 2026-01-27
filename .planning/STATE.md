@@ -6,45 +6,46 @@
 
 **Core Value:** Developers can see exactly how their Rust code translates to Wasm instructions, with source mapping, so they can make informed performance decisions.
 
-**Current Focus:** Phase 6 In Progress - Output Modes
+**Current Focus:** PROJECT COMPLETE - All 6 Phases Delivered
 
 **Key Constraint:** Desktop only - no web/WASM target. Centralized state to prevent sync bugs.
 
 ## Current Position
 
-**Phase:** 6 of 6 (Output Modes)
-**Plan:** 1 of 2 complete
-**Status:** In progress
+**Phase:** 6 of 6 (Output Modes) - COMPLETE
+**Plan:** 2 of 2 complete
+**Status:** PROJECT COMPLETE
 
-**Progress:** [#########░] 90%
+**Progress:** [##########] 100%
 
 ### Phase 6 Success Criteria
 
 - [x] CLI argument parsing with --json and --summary flags
 - [x] JSON output generation for module info and call graph
 - [x] Summary output generation with function list
-- [ ] Mode dispatch in main.rs (Plan 02)
-- [ ] Headless mode runs without GUI dependencies
+- [x] Mode dispatch in main.rs (Plan 02)
+- [x] Headless mode runs without GUI dependencies
 
 ### Active Requirements
 
 | ID | Requirement | Status |
 |----|-------------|--------|
-| OUT-01 | JSON output with call graph | Complete (module ready) |
-| OUT-02 | Summary output with function sizes | Complete (module ready) |
-| OUT-03 | Headless mode dispatch | Pending (Plan 02) |
+| OUT-01 | JSON output with call graph | Complete |
+| OUT-02 | Summary output with function sizes | Complete |
+| OUT-03 | Headless mode dispatch | Complete |
 
 ## Performance Metrics
 
-**Plans Completed:** 18
-**Plans Total:** ~20 (across 6 phases)
+**Plans Completed:** 19
+**Plans Total:** 19 (across 6 phases)
 **Verification Pass Rate:** 100%
 **Phase 1 Duration:** 11 min (01-01: 5 min, 01-02: 6 min)
 **Phase 2 Duration:** 13 min (02-01: 3 min, 02-02: 6 min, 02-03: 4 min)
 **Phase 3 Duration:** 26 min (03-01: 5 min, 03-02: 5 min, 03-03: 8 min, 03-04: 8 min)
 **Phase 4 Duration:** 14 min (04-01: 4 min, 04-02: 2 min, 04-03: 5 min, 04-04: 3 min)
 **Phase 5 Duration:** 10 min (05-01: 5 min, 05-02: 2 min, 05-03: 3 min) - gap closure
-**Phase 6 Duration:** 4 min (06-01: 4 min)
+**Phase 6 Duration:** 8 min (06-01: 4 min, 06-02: 4 min)
+**Total Project Duration:** ~82 min
 
 ## Accumulated Context
 
@@ -98,10 +99,13 @@
 | Clap group for mutual exclusion | --json and --summary use group="output_mode" for mutual exclusion | 06-01 |
 | OutputMode enum for dispatch | Clear enum-based dispatch pattern for headless vs GUI mode | 06-01 |
 | Top 20 functions in summary | Summary output shows top 20 functions by size with percentages | 06-01 |
+| Mode dispatch via match | Clean separation between GUI and headless code paths | 06-02 |
+| Exit code convention | 0=success, 1=error, 2=usage follows standard CLI tools | 06-02 |
+| Auto-load in GUI mode | Running `wasm-poke file.wasm` opens GUI with file loaded | 06-02 |
 
 ### Technical Debt
 
-None yet.
+None.
 
 ### Blockers
 
@@ -132,24 +136,24 @@ None.
 - [x] Execute Plan 05-03 (UAT gap closure - cursor restore + call tooltip)
 - [x] Run `/gsd:plan-phase 6` to create Phase 6 execution plan (Output Modes)
 - [x] Execute Plan 06-01 (CLI and output modules)
-- [ ] Execute Plan 06-02 (Mode dispatch integration)
+- [x] Execute Plan 06-02 (Mode dispatch integration)
 
 ## Session Continuity
 
 ### Last Session
 
 **Date:** 2026-01-26
-**Accomplished:** Completed Plan 06-01 (CLI and Output Modules)
-  - Created src/cli.rs with Cli struct, OutputMode enum, clap derive
-  - Created src/output.rs with JsonOutput, output_json, output_summary
-  - Wired modules into main.rs
-  - Added 15 unit tests for CLI and output
-**Stopped At:** Plan 06-01 complete, ready for Plan 06-02
+**Accomplished:** Completed Plan 06-02 (Mode Dispatch Integration) - PROJECT COMPLETE
+  - Implemented mode dispatch in main.rs (GUI/JSON/Summary)
+  - Added stdin support for piped wasm bytes
+  - Added file output with -o flag
+  - All CLI tests pass: JSON, summary, exit codes
+**Stopped At:** Project complete
 
 ### Next Session
 
-**Start With:** Execute Plan 06-02 (Mode dispatch integration)
-**Context Needed:** src/cli.rs, src/output.rs, src/main.rs
+**Start With:** N/A - Project complete
+**Context Needed:** N/A
 
 ### Important Files
 
@@ -172,7 +176,7 @@ None.
 | src/gui/panels/callers_tree.rs | CallersTreePanel with keyboard nav + filter |
 | src/gui/panels/size_tree.rs | SizeTreePanel with keyboard nav + filter |
 | src/gui/panels/inspector.rs | InspectorPanel with synchronized three-panel view |
-| src/main.rs | egui entry point with cli and output modules |
+| src/main.rs | Entry point with mode dispatch |
 
 ---
 *State initialized: 2026-01-26*
@@ -196,3 +200,6 @@ None.
 *Plan 05-03 completed: 2026-01-27*
 *Phase 5 completed: 2026-01-27*
 *Plan 06-01 completed: 2026-01-26*
+*Plan 06-02 completed: 2026-01-26*
+*Phase 6 completed: 2026-01-26*
+*PROJECT COMPLETE: 2026-01-26*
