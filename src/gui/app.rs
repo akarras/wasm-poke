@@ -213,6 +213,11 @@ impl egui_dock::TabViewer for WasmPokeTabViewer<'_> {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab) {
+        // If user clicked in this tab area, it becomes active for keyboard focus
+        if ui.ui_contains_pointer() && ui.input(|i| i.pointer.any_click()) {
+            self.selection.active_tab = *tab;
+        }
+
         match tab {
             TabKind::FunctionList => {
                 if let Some(module) = self.module {
