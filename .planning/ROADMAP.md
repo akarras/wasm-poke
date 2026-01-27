@@ -185,9 +185,16 @@ Plans:
 3. JSON output includes function list, sizes, and call graph data
 4. CLI flags work without requiring X11/display (headless operation)
 
+**Plans:** 2 plans
+
+Plans:
+- [ ] 06-01-PLAN.md - Create CLI argument parsing and output generation modules
+- [ ] 06-02-PLAN.md - Integrate mode dispatch and test CLI output modes
+
 **Notes:**
-- These likely exist in current codebase; may just need preservation/verification
-- Separate binary entry point or flag-based mode detection
+- Uses clap (already in Cargo.toml) for CLI argument parsing
+- serde_json (already in Cargo.toml) for JSON serialization
+- Mode dispatch in main.rs: check output flags BEFORE importing GUI modules
 - Ensures wasm-poke remains useful for CI/scripting workflows
 
 ---
@@ -201,7 +208,7 @@ Plans:
 | 3 - Call Graph | Complete | CALL-01, CALL-02, CALL-03, CALL-04 | 100% |
 | 4 - Inspector | Complete | INSP-01, INSP-02, INSP-05 | 100% |
 | 5 - Navigation & Help | Complete | INSP-03, INSP-04 | 100% |
-| 6 - Output Modes | Not Started | OUT-01, OUT-02 | 0% |
+| 6 - Output Modes | Planned | OUT-01, OUT-02 | 0% |
 
 **Overall:** 5/6 phases complete (83%)
 
@@ -212,3 +219,4 @@ Plans:
 *Phase 3 complete: 2026-01-26*
 *Phase 4 complete: 2026-01-26*
 *Phase 5 complete: 2026-01-27*
+*Phase 6 planned: 2026-01-27*
