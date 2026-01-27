@@ -6,17 +6,17 @@
 
 **Core Value:** Developers can see exactly how their Rust code translates to Wasm instructions, with source mapping, so they can make informed performance decisions.
 
-**Current Focus:** Phase 3 Complete - All Call Graph Views Implemented
+**Current Focus:** Phase 3 Complete - All Call Graph Views with Keyboard Nav and Filtering
 
 **Key Constraint:** Desktop only - no web/WASM target. Centralized state to prevent sync bugs.
 
 ## Current Position
 
 **Phase:** 3 of 6 (Call Graph Views)
-**Plan:** 3 of 3 complete
+**Plan:** 4 of 4 complete
 **Status:** Phase complete
 
-**Progress:** [########..] 75%
+**Progress:** [########..] 80%
 
 ### Phase 3 Success Criteria
 
@@ -26,6 +26,9 @@
 - [x] Selection syncs bidirectionally between function list and call tree
 - [x] User can see Callers Tree tab (upstream calls)
 - [x] User can see Size Tree tab (cumulative size impact)
+- [x] User can navigate trees with j/k/arrows keys
+- [x] User can filter trees by typing in search box
+- [x] Filter shows only matching nodes and ancestors
 
 ### Active Requirements
 
@@ -36,15 +39,17 @@
 | TREE-03 | Depth limit of 5 levels | Complete |
 | TREE-04 | Callers Tree (upstream) | Complete |
 | TREE-05 | Size Tree (cumulative) | Complete |
+| TREE-06 | Keyboard navigation (j/k/arrows) | Complete |
+| TREE-07 | Filter search with highlighting | Complete |
 
 ## Performance Metrics
 
-**Plans Completed:** 9
-**Plans Total:** ~12 (across 6 phases)
+**Plans Completed:** 10
+**Plans Total:** ~13 (across 6 phases)
 **Verification Pass Rate:** 100%
 **Phase 1 Duration:** 11 min (01-01: 5 min, 01-02: 6 min)
 **Phase 2 Duration:** 13 min (02-01: 3 min, 02-02: 6 min, 02-03: 4 min)
-**Phase 3 Duration:** 18 min (03-01: 5 min, 03-02: 5 min, 03-03: 8 min)
+**Phase 3 Duration:** 26 min (03-01: 5 min, 03-02: 5 min, 03-03: 8 min, 03-04: 8 min)
 
 ## Accumulated Context
 
@@ -73,6 +78,9 @@
 | Reverse graph computed once on load | O(E) precomputation enables O(1) caller lookup per function | 03-02 |
 | Logarithmic color scale for size | Linear scale makes small differences invisible; log scale differentiates better | 03-03 |
 | Warm orange for size visualization | Distinct from call tree, size = "weight" = warm colors | 03-03 |
+| Focus path as Vec<(u32, usize)> | Unique node identification for keyboard navigation | 03-04 |
+| handle_keyboard pattern | Consistent tree navigation across all panels | 03-04 |
+| subtree_contains_match | Recursive filter with ancestor visibility | 03-04 |
 
 ### Technical Debt
 
@@ -95,6 +103,7 @@ None.
 - [x] Execute Plan 03-01 (Call Tree panel)
 - [x] Execute Plan 03-02 (Callers Tree panel)
 - [x] Execute Plan 03-03 (Size Tree panel)
+- [x] Execute Plan 03-04 (Keyboard nav + filter for trees)
 - [ ] Run `/gsd:plan-phase 4` to create Phase 4 execution plan (Inspector Panel)
 
 ## Session Continuity
@@ -102,13 +111,14 @@ None.
 ### Last Session
 
 **Date:** 2026-01-26
-**Accomplished:** Completed Plan 03-03 (Size Tree panel)
-  - SizeTreePanel with cumulative size using unique_cumulative_size
-  - Size format: "name - X.X KiB (Y.Y%)"
-  - Logarithmic color-coded background for visual differentiation
-  - Same tree rendering pattern as CallTreePanel
-  - Wired into app and tab viewer
-**Stopped At:** Phase 3 complete, ready for Phase 4
+**Accomplished:** Completed Plan 03-04 (Keyboard navigation and filtering)
+  - Added focus_path tracking for keyboard-navigated nodes
+  - Implemented j/k/arrows/Enter/Space/g/G for tree navigation
+  - Added filter UI with TextEdit at top of each tree panel
+  - Filter shows matching nodes and ancestors with highlighting
+  - Focus indicator with light blue border stroke
+  - Synced CollapsingState with SelectionState.expanded_nodes
+**Stopped At:** Phase 3 fully complete, ready for Phase 4
 
 ### Next Session
 
@@ -130,9 +140,9 @@ None.
 | src/gui/tabs.rs | TabKind enum for panel types |
 | src/gui/panels/mod.rs | Panel module exports |
 | src/gui/panels/function_list.rs | FunctionListPanel with keyboard nav + multi-select |
-| src/gui/panels/call_tree.rs | CallTreePanel with tree rendering |
-| src/gui/panels/callers_tree.rs | CallersTreePanel with upstream calls |
-| src/gui/panels/size_tree.rs | SizeTreePanel with cumulative size |
+| src/gui/panels/call_tree.rs | CallTreePanel with keyboard nav + filter |
+| src/gui/panels/callers_tree.rs | CallersTreePanel with keyboard nav + filter |
+| src/gui/panels/size_tree.rs | SizeTreePanel with keyboard nav + filter |
 | src/main.rs | egui entry point |
 
 ---
@@ -145,4 +155,5 @@ None.
 *Plan 03-01 completed: 2026-01-26*
 *Plan 03-02 completed: 2026-01-26*
 *Plan 03-03 completed: 2026-01-26*
+*Plan 03-04 completed: 2026-01-26*
 *Phase 3 completed: 2026-01-26*
