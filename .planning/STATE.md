@@ -34,14 +34,14 @@
 
 ## Performance Metrics
 
-**Plans Completed:** 16
-**Plans Total:** ~18 (across 6 phases)
+**Plans Completed:** 17
+**Plans Total:** ~19 (across 6 phases)
 **Verification Pass Rate:** 100%
 **Phase 1 Duration:** 11 min (01-01: 5 min, 01-02: 6 min)
 **Phase 2 Duration:** 13 min (02-01: 3 min, 02-02: 6 min, 02-03: 4 min)
 **Phase 3 Duration:** 26 min (03-01: 5 min, 03-02: 5 min, 03-03: 8 min, 03-04: 8 min)
 **Phase 4 Duration:** 14 min (04-01: 4 min, 04-02: 2 min, 04-03: 5 min, 04-04: 3 min)
-**Phase 5 Duration:** 7 min (05-01: 5 min, 05-02: 2 min) - parallel execution
+**Phase 5 Duration:** 10 min (05-01: 5 min, 05-02: 2 min, 05-03: 3 min) - gap closure
 
 ## Accumulated Context
 
@@ -90,6 +90,8 @@
 | KeyAction enum for navigation | Cleaner than sentinel values for keyboard command dispatch | 05-01 |
 | Cap navigation history at 50 | Prevents unbounded memory growth; drops oldest when full | 05-01 |
 | Clear history on clear_selection only | History persists across manual selections for usability | 05-01 |
+| navigated_back flag for cursor restore | Set flag before navigate_back(), check in update_cache() to skip cursor=0 | 05-03 |
+| Call target tooltip over generic help | Check for call target first, show function name instead of generic "call" help | 05-03 |
 
 ### Technical Debt
 
@@ -121,6 +123,7 @@ None.
 - [x] Run `/gsd:plan-phase 5` to create Phase 5 execution plan (Navigation & Help)
 - [x] Execute Plan 05-01 (Inspector navigation - Enter/Backspace)
 - [x] Execute Plan 05-02 (Instruction help tooltips)
+- [x] Execute Plan 05-03 (UAT gap closure - cursor restore + call tooltip)
 - [ ] Run `/gsd:plan-phase 6` to create Phase 6 execution plan (Output Modes)
 
 ## Session Continuity
@@ -128,12 +131,11 @@ None.
 ### Last Session
 
 **Date:** 2026-01-27
-**Accomplished:** Completed Phase 5 (Navigation & Help)
-  - Plan 05-01: Goto navigation with history stack (Enter/Backspace)
-  - Plan 05-02: Instruction help tooltips on hover
-  - Both plans executed in parallel
-  - All success criteria verified
-**Stopped At:** Phase 5 complete, verified
+**Accomplished:** Completed Phase 5 UAT gap closure (Plan 05-03)
+  - Fixed cursor position restoration on back navigation
+  - Added call target function name tooltips
+  - All UAT gaps now closed
+**Stopped At:** Phase 5 fully complete with gaps closed
 
 ### Next Session
 
@@ -180,4 +182,5 @@ None.
 *Phase 4 completed: 2026-01-27*
 *Plan 05-01 completed: 2026-01-27*
 *Plan 05-02 completed: 2026-01-27*
+*Plan 05-03 completed: 2026-01-27*
 *Phase 5 completed: 2026-01-27*
