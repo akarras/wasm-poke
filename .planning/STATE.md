@@ -6,17 +6,17 @@
 
 **Core Value:** Developers can see exactly how their Rust code translates to Wasm instructions, with source mapping, so they can make informed performance decisions.
 
-**Current Focus:** Phase 4 Complete - Inspector Panel with Focus Isolation Fix
+**Current Focus:** Phase 5 Plan 2 Complete - Instruction Help Tooltips
 
 **Key Constraint:** Desktop only - no web/WASM target. Centralized state to prevent sync bugs.
 
 ## Current Position
 
-**Phase:** 4 of 6 (Inspector Panel)
-**Plan:** 4 of 4 complete (gap closure)
-**Status:** Phase complete
+**Phase:** 5 of 6 (Navigation & Help)
+**Plan:** 2 of 3 complete (instruction tooltips)
+**Status:** In progress
 
-**Progress:** [########..] 75%
+**Progress:** [########..] 80%
 
 ### Phase 4 Success Criteria
 
@@ -51,6 +51,7 @@
 **Phase 2 Duration:** 13 min (02-01: 3 min, 02-02: 6 min, 02-03: 4 min)
 **Phase 3 Duration:** 26 min (03-01: 5 min, 03-02: 5 min, 03-03: 8 min, 03-04: 8 min)
 **Phase 4 Duration:** 14 min (04-01: 4 min, 04-02: 2 min, 04-03: 5 min, 04-04: 3 min)
+**Phase 5 Duration:** ~4 min so far (05-01: 2 min, 05-02: 2 min)
 
 ## Accumulated Context
 
@@ -93,6 +94,9 @@
 | Use vertical_scroll_offset | egui 0.33 doesn't have scroll_to_row; use (row * ROW_HEIGHT) calculation | 04-03 |
 | Track active_tab in SelectionState | Centralized state for keyboard focus isolation | 04-04 |
 | Click detection for tab activation | ui_contains_pointer + any_click works with egui_dock | 04-04 |
+| Fallback help for unknown instructions | Returns generic help instead of None for unknown Wasm instructions | 05-02 |
+| Skip comments/syntax for tooltips | Comments (;;) and syntax markers ((, )) don't get tooltips | 05-02 |
+| on_hover_text for tooltips | egui handles tooltip positioning automatically | 05-02 |
 
 ### Technical Debt
 
@@ -121,7 +125,10 @@ None.
 - [x] Execute Plan 04-02 (Hex Panel and Source Panel)
 - [x] Execute Plan 04-03 (Synchronized scrolling and click navigation)
 - [x] Execute Plan 04-04 (Keyboard focus isolation fix)
-- [ ] Run `/gsd:plan-phase 5` to create Phase 5 execution plan (Export/Stats)
+- [x] Run `/gsd:plan-phase 5` to create Phase 5 execution plan (Navigation & Help)
+- [x] Execute Plan 05-01 (Inspector navigation - Enter/Backspace)
+- [x] Execute Plan 05-02 (Instruction help tooltips)
+- [ ] Execute Plan 05-03 (Keyboard shortcuts help panel)
 - [ ] Run `/gsd:plan-phase 6` to create Phase 6 execution plan (Polish)
 
 ## Session Continuity
@@ -129,17 +136,17 @@ None.
 ### Last Session
 
 **Date:** 2026-01-27
-**Accomplished:** Completed Plan 04-04 (Keyboard Focus Isolation)
-  - Added active_tab field to SelectionState
-  - Track active tab when user clicks in panel area
-  - Gate keyboard handling in all panels by active_tab
-  - Fixes j/k affecting all panels simultaneously
-**Stopped At:** Plan 04-04 complete, Phase 4 UAT issue resolved
+**Accomplished:** Completed Plan 05-02 (Instruction Help Tooltips)
+  - Extended help.rs with 35+ additional instructions
+  - Added fallback for unknown instructions
+  - Added extract_mnemonic helper to parse WAT text
+  - Added on_hover_text call in WAT panel
+**Stopped At:** Plan 05-02 complete, 2/3 Phase 5 plans done
 
 ### Next Session
 
-**Start With:** Plan Phase 5 (Export/Stats) or Phase 6 (Polish)
-**Context Needed:** Review remaining phases in ROADMAP.md
+**Start With:** Plan 05-03 (Keyboard shortcuts help panel)
+**Context Needed:** Review 05-03-PLAN.md for help panel requirements
 
 ### Important Files
 
@@ -179,3 +186,5 @@ None.
 *Plan 04-03 completed: 2026-01-27*
 *Plan 04-04 completed: 2026-01-27*
 *Phase 4 completed: 2026-01-27*
+*Plan 05-01 completed: 2026-01-27*
+*Plan 05-02 completed: 2026-01-27*
