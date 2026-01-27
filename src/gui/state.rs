@@ -6,6 +6,8 @@
 
 use std::collections::{BTreeSet, HashSet};
 
+use crate::gui::tabs::TabKind;
+
 /// Centralized selection state - single source of truth for all views.
 ///
 /// ALL panels read/write this struct; never duplicate selection state.
@@ -23,7 +25,6 @@ use std::collections::{BTreeSet, HashSet};
 /// - Single click: `select_single()` - clears selection, selects one
 /// - Ctrl+click: `toggle_select()` - toggles individual function
 /// - Shift+click: `extend_select()` or `extend_select_indices()` - range selection
-#[derive(Default)]
 pub struct SelectionState {
     /// Currently selected functions by INDEX (not list position).
     /// Using BTreeSet for deterministic ordered iteration.
@@ -44,6 +45,10 @@ pub struct SelectionState {
     /// Expanded nodes in tree views, identified by path from root.
     /// Each element is (function_index, child_position_in_parent).
     pub expanded_nodes: HashSet<Vec<(u32, usize)>>,
+
+    /// Currently active tab (for keyboard focus isolation).
+    /// Keyboard navigation only affects the panel in the active tab.
+    pub active_tab: TabKind,
 }
 
 impl SelectionState {
@@ -120,6 +125,19 @@ impl SelectionState {
     /// Returns the most recently selected function.
     pub fn primary_selection(&self) -> Option<u32> {
         self.last_selected
+    }
+}
+
+impl Default for SelectionState {
+    fn default() -> Self {
+        Self {
+            selected_functions: BTreeSet::new(),
+            last_selected: None,
+            focus_index: None,
+            instruction_cursor: 0,
+            expanded_nodes: HashSet::new(),
+            active_tab: TabKind::FunctionList, // Default to function list
+        }
     }
 }
 
