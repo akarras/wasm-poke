@@ -1,17 +1,23 @@
-//! Inspector panel with WAT disassembly display and keyboard navigation.
+//! Inspector panel with three-panel view: Hex, WAT, and Source.
 //!
-//! This panel displays WAT instructions for the selected function with
-//! vim-style keyboard navigation (j/k/g/G) and visual line highlighting.
+//! This panel displays WAT disassembly, hex bytes, and source code for the
+//! selected function with vim-style keyboard navigation (j/k/g/G) and
+//! synchronized visual highlighting across all panels.
+
+use std::collections::HashMap;
 
 use eframe::egui::{self, Key, RichText, ScrollArea};
 
 use crate::gui::state::SelectionState;
-use wasm_poke::{disassemble_function_wat_lines, function_body_bytes, WasmModuleInfo, WatLine};
+use wasm_poke::{
+    disassemble_function_wat_lines, function_body_bytes, map_instr_to_source_fast,
+    SourceLocation, WasmModuleInfo, WatLine,
+};
 
 /// Row height for WAT instruction lines.
 const ROW_HEIGHT: f32 = 18.0;
 
-/// Panel for displaying WAT disassembly of the selected function.
+/// Panel for displaying WAT disassembly, hex bytes, and source code.
 pub struct InspectorPanel {
     /// Cached function index to detect selection changes.
     cached_func_index: Option<u32>,
@@ -19,6 +25,16 @@ pub struct InspectorPanel {
     cached_wat_lines: Vec<WatLine>,
     /// Cached function body bytes.
     cached_hex_bytes: Vec<u8>,
+    /// Cached source mappings: instruction index -> SourceLocation.
+    cached_source_mappings: Vec<Option<SourceLocation>>,
+    /// Cached source file content: path -> lines.
+    source_file_cache: HashMap<String, Vec<String>>,
+    /// Current source file path (for display).
+    cached_source_path: Option<String>,
+    /// Current source file lines (for current function).
+    cached_source_lines: Vec<String>,
+    /// Current source line number (1-indexed, from DWARF).
+    cached_current_source_line: Option<u32>,
 }
 
 impl InspectorPanel {
@@ -28,6 +44,11 @@ impl InspectorPanel {
             cached_func_index: None,
             cached_wat_lines: Vec::new(),
             cached_hex_bytes: Vec::new(),
+            cached_source_mappings: Vec::new(),
+            source_file_cache: HashMap::new(),
+            cached_source_path: None,
+            cached_source_lines: Vec::new(),
+            cached_current_source_line: None,
         }
     }
 
@@ -69,10 +90,52 @@ impl InspectorPanel {
             self.cached_hex_bytes = Vec::new();
         }
 
+        // Compute source mappings for each WAT line
+        self.cached_source_mappings = self
+            .cached_wat_lines
+            .iter()
+            .map(|wl| map_instr_to_source_fast(module, wasm_bytes, func_index, wl.offset))
+            .collect();
+
+        // Determine primary source file (most common in mappings)
+        let mut file_counts: HashMap<&str, usize> = HashMap::new();
+        for loc in self.cached_source_mappings.iter().flatten() {
+            *file_counts.entry(&loc.file).or_insert(0) += 1;
+        }
+        self.cached_source_path = file_counts
+            .into_iter()
+            .max_by_key(|(_, count)| *count)
+            .map(|(path, _)| path.to_string());
+
+        // Load source file if found
+        if let Some(ref path) = self.cached_source_path {
+            if !self.source_file_cache.contains_key(path) {
+                if let Ok(content) = std::fs::read_to_string(path) {
+                    let lines: Vec<String> = content.lines().map(String::from).collect();
+                    self.source_file_cache.insert(path.clone(), lines);
+                }
+            }
+            self.cached_source_lines = self
+                .source_file_cache
+                .get(path)
+                .cloned()
+                .unwrap_or_default();
+        } else {
+            self.cached_source_lines = Vec::new();
+        }
+
         // Reset cursor when function changes
         selection.instruction_cursor = 0;
 
         true
+    }
+
+    /// Get the current source line number for the given cursor position.
+    fn current_source_line(&self, cursor: usize) -> Option<u32> {
+        self.cached_source_mappings
+            .get(cursor)
+            .and_then(|opt| opt.as_ref())
+            .map(|loc| loc.line)
     }
 
     /// Handle keyboard navigation for vim-style navigation.
