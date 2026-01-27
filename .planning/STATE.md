@@ -51,7 +51,7 @@
 **Phase 2 Duration:** 13 min (02-01: 3 min, 02-02: 6 min, 02-03: 4 min)
 **Phase 3 Duration:** 26 min (03-01: 5 min, 03-02: 5 min, 03-03: 8 min, 03-04: 8 min)
 **Phase 4 Duration:** 14 min (04-01: 4 min, 04-02: 2 min, 04-03: 5 min, 04-04: 3 min)
-**Phase 5 Duration:** ~4 min so far (05-01: 2 min, 05-02: 2 min)
+**Phase 5 Duration:** ~7 min so far (05-01: 5 min, 05-02: 2 min)
 
 ## Accumulated Context
 
@@ -97,6 +97,9 @@
 | Fallback help for unknown instructions | Returns generic help instead of None for unknown Wasm instructions | 05-02 |
 | Skip comments/syntax for tooltips | Comments (;;) and syntax markers ((, )) don't get tooltips | 05-02 |
 | on_hover_text for tooltips | egui handles tooltip positioning automatically | 05-02 |
+| KeyAction enum for navigation | Cleaner than sentinel values for keyboard command dispatch | 05-01 |
+| Cap navigation history at 50 | Prevents unbounded memory growth; drops oldest when full | 05-01 |
+| Clear history on clear_selection only | History persists across manual selections for usability | 05-01 |
 
 ### Technical Debt
 
