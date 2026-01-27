@@ -217,52 +217,67 @@ impl InspectorPanel {
             .count()
     }
 
+    /// Get the call target for the current cursor position, if any.
+    fn current_call_target(&self, cursor: usize) -> Option<u32> {
+        self.cached_wat_lines
+            .get(cursor)
+            .and_then(|line| extract_call_target(&line.text))
+    }
+
+    /// Check if a function index corresponds to a defined function (not just an import).
+    fn function_exists(module: &WasmModuleInfo, target: u32) -> bool {
+        module.functions.iter().any(|f| f.index == target)
+    }
+
     /// Handle keyboard navigation for vim-style navigation.
     ///
-    /// Returns Some(row_position) if the cursor changed and we should scroll to that row.
-    fn handle_keyboard(
-        &self,
-        ctx: &egui::Context,
-        selection: &mut SelectionState,
-        line_count: usize,
-    ) -> Option<usize> {
+    /// Returns KeyAction indicating what action to take.
+    fn handle_keyboard(&self, ctx: &egui::Context, line_count: usize, cursor: usize) -> KeyAction {
         if line_count == 0 {
-            return None;
+            return KeyAction::None;
         }
-
-        let current = selection.instruction_cursor;
 
         // Check modifiers
         let shift = ctx.input(|i| i.modifiers.shift);
 
-        let new_pos = ctx.input(|i| {
+        ctx.input(|i| {
             // j or ArrowDown: move down 1
             if i.key_pressed(Key::J) || i.key_pressed(Key::ArrowDown) {
-                return Some(current.saturating_add(1).min(line_count - 1));
+                let new_pos = cursor.saturating_add(1).min(line_count - 1);
+                if new_pos != cursor {
+                    return KeyAction::MoveCursor(new_pos);
+                }
             }
             // k or ArrowUp: move up 1
             if i.key_pressed(Key::K) || i.key_pressed(Key::ArrowUp) {
-                return Some(current.saturating_sub(1));
+                let new_pos = cursor.saturating_sub(1);
+                if new_pos != cursor {
+                    return KeyAction::MoveCursor(new_pos);
+                }
             }
             // g (without shift) or Home: jump to top
             if (i.key_pressed(Key::G) && !shift) || i.key_pressed(Key::Home) {
-                return Some(0);
+                if cursor != 0 {
+                    return KeyAction::MoveCursor(0);
+                }
             }
             // G (with shift) or End: jump to bottom
             if (i.key_pressed(Key::G) && shift) || i.key_pressed(Key::End) {
-                return Some(line_count - 1);
+                let last = line_count - 1;
+                if cursor != last {
+                    return KeyAction::MoveCursor(last);
+                }
             }
-            None
-        });
-
-        if let Some(new_pos) = new_pos {
-            if new_pos != current {
-                selection.instruction_cursor = new_pos;
-                return Some(new_pos);
+            // Enter: navigate to call target
+            if i.key_pressed(Key::Enter) {
+                return KeyAction::GotoCall;
             }
-        }
-
-        None
+            // Backspace: navigate back
+            if i.key_pressed(Key::Backspace) {
+                return KeyAction::GoBack;
+            }
+            KeyAction::None
+        })
     }
 
     /// Main render method for the inspector panel.
@@ -314,10 +329,43 @@ impl InspectorPanel {
         let line_count = self.cached_wat_lines.len();
 
         // Handle keyboard navigation (only if this tab is active)
-        let keyboard_scroll = if selection.active_tab == TabKind::Inspector {
-            self.handle_keyboard(ctx, selection, line_count)
+        let keyboard_action = if selection.active_tab == TabKind::Inspector {
+            self.handle_keyboard(ctx, line_count, selection.instruction_cursor)
         } else {
-            None
+            KeyAction::None
+        };
+
+        // Process keyboard action and determine scroll position
+        let keyboard_scroll: Option<usize> = match keyboard_action {
+            KeyAction::MoveCursor(new_pos) => {
+                selection.instruction_cursor = new_pos;
+                Some(new_pos)
+            }
+            KeyAction::GotoCall => {
+                // Enter pressed - check for call target
+                if let Some(target) = self.current_call_target(selection.instruction_cursor) {
+                    if Self::function_exists(module, target) {
+                        // Push current position to history
+                        if let Some(current) = selection.last_selected {
+                            selection.push_navigation(current, selection.instruction_cursor);
+                        }
+                        // Navigate to target function
+                        selection.select_single(target);
+                        // Force cache update on next frame
+                        self.cached_func_index = None;
+                    }
+                }
+                None
+            }
+            KeyAction::GoBack => {
+                // Backspace pressed - go back
+                if selection.navigate_back() {
+                    // Force cache update on next frame
+                    self.cached_func_index = None;
+                }
+                None
+            }
+            KeyAction::None => None,
         };
 
         // Update current source line based on cursor
