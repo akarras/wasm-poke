@@ -154,6 +154,19 @@ impl InspectorPanel {
             .map(|(idx, _)| idx)
     }
 
+    /// Count how many WAT instructions map to a given source line.
+    /// Used to show N:1 indicators in source panel.
+    fn count_wat_for_source_line(&self, source_line: u32) -> usize {
+        self.cached_source_mappings
+            .iter()
+            .filter(|opt| {
+                opt.as_ref()
+                    .map(|loc| loc.line == source_line)
+                    .unwrap_or(false)
+            })
+            .count()
+    }
+
     /// Handle keyboard navigation for vim-style navigation.
     ///
     /// Returns Some(row_position) if the cursor changed and we should scroll to that row.
@@ -221,6 +234,17 @@ impl InspectorPanel {
 
         // Update cache if function changed
         let cache_updated = self.update_cache(func_index, module, wasm_bytes, selection);
+
+        // Reset scroll tracking when function changes
+        if cache_updated {
+            self.last_scrolled_cursor = None;
+        }
+
+        // Clamp cursor to valid range (handles edge case when switching to smaller function)
+        let max_cursor = self.cached_wat_lines.len().saturating_sub(1);
+        if selection.instruction_cursor > max_cursor && !self.cached_wat_lines.is_empty() {
+            selection.instruction_cursor = max_cursor;
+        }
 
         // Get function name for header
         let func_name = module
@@ -314,6 +338,15 @@ impl InspectorPanel {
         ui.separator();
 
         let line_count = self.cached_wat_lines.len();
+
+        // Handle empty function
+        if line_count == 0 {
+            ui.centered_and_justified(|ui| {
+                ui.label("Function has no instructions");
+            });
+            return;
+        }
+
         let available_height = ui.available_height();
 
         // Create scroll area with WAT display
@@ -527,15 +560,25 @@ impl InspectorPanel {
                         .rect_filled(rect, 0.0, ui.visuals().selection.bg_fill);
                 }
 
-                // Line number gutter
-                let gutter_text = format!("{:4} ", line_num);
+                // Line number gutter with optional N:1 indicator
+                let wat_count = self.count_wat_for_source_line(line_num as u32);
+                let gutter_text = if wat_count > 1 && is_highlighted {
+                    // Show count indicator for N:1 mappings when highlighted
+                    format!("{:4}*", line_num)
+                } else {
+                    format!("{:4} ", line_num)
+                };
                 let gutter_pos = rect.left_top() + egui::vec2(2.0, 2.0);
                 ui.painter().text(
                     gutter_pos,
                     egui::Align2::LEFT_TOP,
                     &gutter_text,
                     egui::FontId::monospace(14.0),
-                    ui.visuals().weak_text_color(),
+                    if wat_count > 1 && is_highlighted {
+                        ui.visuals().strong_text_color()
+                    } else {
+                        ui.visuals().weak_text_color()
+                    },
                 );
 
                 // Source line text
