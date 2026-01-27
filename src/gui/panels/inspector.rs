@@ -141,6 +141,19 @@ impl InspectorPanel {
             .map(|loc| loc.line)
     }
 
+    /// Find the first WAT instruction index that maps to a given source line.
+    fn first_wat_for_source_line(&self, source_line: u32) -> Option<usize> {
+        self.cached_source_mappings
+            .iter()
+            .enumerate()
+            .find(|(_, opt)| {
+                opt.as_ref()
+                    .map(|loc| loc.line == source_line)
+                    .unwrap_or(false)
+            })
+            .map(|(idx, _)| idx)
+    }
+
     /// Handle keyboard navigation for vim-style navigation.
     ///
     /// Returns Some(row_position) if the cursor changed and we should scroll to that row.
@@ -284,7 +297,7 @@ impl InspectorPanel {
                 egui::vec2(ui.available_width(), available_height),
                 egui::Layout::top_down(egui::Align::LEFT),
                 |ui| {
-                    self.show_source_panel(ui, scroll_to);
+                    self.show_source_panel(ui, selection, scroll_to);
                 },
             );
         });
@@ -364,6 +377,10 @@ impl InspectorPanel {
     }
 
     /// Render the hex bytes panel.
+    ///
+    /// Note: Hex panel is display-only for now. Click-to-navigate from hex bytes
+    /// to instruction is complex (reverse-map byte offset to instruction index)
+    /// and lower-value compared to WAT/source click navigation.
     fn show_hex_panel(&self, ui: &mut egui::Ui, cursor: usize, scroll_to: Option<usize>) {
         ui.label(RichText::new("Hex Bytes").strong());
         ui.separator();
@@ -444,8 +461,13 @@ impl InspectorPanel {
         }
     }
 
-    /// Render the source code panel.
-    fn show_source_panel(&self, ui: &mut egui::Ui, scroll_to: Option<usize>) {
+    /// Render the source code panel with click-to-navigate.
+    fn show_source_panel(
+        &self,
+        ui: &mut egui::Ui,
+        selection: &mut SelectionState,
+        scroll_to: Option<usize>,
+    ) {
         // Header with file path
         if let Some(ref path) = self.cached_source_path {
             // Show just filename, not full path
@@ -484,58 +506,74 @@ impl InspectorPanel {
             scroll_area = scroll_area.vertical_scroll_offset(offset);
         }
 
+        // Collect click events to process after the closure
+        // (because we need to modify selection after the show_rows closure)
+        let mut clicked_line: Option<u32> = None;
+
         scroll_area.show_rows(ui, ROW_HEIGHT, line_count, |ui, row_range| {
-                for line_idx in row_range {
-                    let line_num = line_idx + 1; // 1-indexed
-                    let is_highlighted = current_line == Some(line_num as u32);
+            for line_idx in row_range {
+                let line_num = line_idx + 1; // 1-indexed
+                let is_highlighted = current_line == Some(line_num as u32);
 
-                    // Reserve space for the row
-                    let (rect, _response) = ui.allocate_exact_size(
-                        egui::vec2(ui.available_width(), ROW_HEIGHT),
-                        egui::Sense::hover(),
-                    );
+                // Reserve space for the row - make clickable
+                let (rect, response) = ui.allocate_exact_size(
+                    egui::vec2(ui.available_width(), ROW_HEIGHT),
+                    egui::Sense::click(),
+                );
 
-                    // Paint background highlight for current line
-                    if is_highlighted {
-                        ui.painter()
-                            .rect_filled(rect, 0.0, ui.visuals().selection.bg_fill);
-                    }
-
-                    // Line number gutter
-                    let gutter_text = format!("{:4} ", line_num);
-                    let gutter_pos = rect.left_top() + egui::vec2(2.0, 2.0);
-                    ui.painter().text(
-                        gutter_pos,
-                        egui::Align2::LEFT_TOP,
-                        &gutter_text,
-                        egui::FontId::monospace(14.0),
-                        ui.visuals().weak_text_color(),
-                    );
-
-                    // Source line text
-                    let line_text = self
-                        .cached_source_lines
-                        .get(line_idx)
-                        .map(|s| s.as_str())
-                        .unwrap_or("");
-
-                    let text_color = if is_highlighted {
-                        ui.visuals().strong_text_color()
-                    } else {
-                        ui.visuals().text_color()
-                    };
-
-                    // Position after gutter (5 chars * ~8px per char)
-                    let text_pos = rect.left_top() + egui::vec2(42.0, 2.0);
-                    ui.painter().text(
-                        text_pos,
-                        egui::Align2::LEFT_TOP,
-                        line_text,
-                        egui::FontId::monospace(14.0),
-                        text_color,
-                    );
+                // Paint background highlight for current line
+                if is_highlighted {
+                    ui.painter()
+                        .rect_filled(rect, 0.0, ui.visuals().selection.bg_fill);
                 }
-            });
+
+                // Line number gutter
+                let gutter_text = format!("{:4} ", line_num);
+                let gutter_pos = rect.left_top() + egui::vec2(2.0, 2.0);
+                ui.painter().text(
+                    gutter_pos,
+                    egui::Align2::LEFT_TOP,
+                    &gutter_text,
+                    egui::FontId::monospace(14.0),
+                    ui.visuals().weak_text_color(),
+                );
+
+                // Source line text
+                let line_text = self
+                    .cached_source_lines
+                    .get(line_idx)
+                    .map(|s| s.as_str())
+                    .unwrap_or("");
+
+                let text_color = if is_highlighted {
+                    ui.visuals().strong_text_color()
+                } else {
+                    ui.visuals().text_color()
+                };
+
+                // Position after gutter (5 chars * ~8px per char)
+                let text_pos = rect.left_top() + egui::vec2(42.0, 2.0);
+                ui.painter().text(
+                    text_pos,
+                    egui::Align2::LEFT_TOP,
+                    line_text,
+                    egui::FontId::monospace(14.0),
+                    text_color,
+                );
+
+                // Handle click to navigate to first WAT instruction for this source line
+                if response.clicked() {
+                    clicked_line = Some(line_num as u32);
+                }
+            }
+        });
+
+        // Process click after closure to update selection
+        if let Some(source_line) = clicked_line {
+            if let Some(wat_idx) = self.first_wat_for_source_line(source_line) {
+                selection.instruction_cursor = wat_idx;
+            }
+        }
     }
 }
 
