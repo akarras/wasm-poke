@@ -155,6 +155,12 @@ Plans:
 3. User can see help text explaining the current Wasm instruction (hover or panel)
 4. Help text covers all standard Wasm instructions (not just common ones)
 
+**Plans:** 2 plans
+
+Plans:
+- [ ] 05-01-PLAN.md - Add goto navigation with history stack
+- [ ] 05-02-PLAN.md - Add instruction help tooltips on hover
+
 **Notes:**
 - Goto navigation pushes to a stack so user can "go back"
 - Instruction help can be a tooltip or dedicated help panel
@@ -193,14 +199,15 @@ Plans:
 | 2 - Function List | Complete | LIST-01, LIST-02, LIST-03, LIST-04 | 100% |
 | 3 - Call Graph | Complete | CALL-01, CALL-02, CALL-03, CALL-04 | 100% |
 | 4 - Inspector | Complete | INSP-01, INSP-02, INSP-05 | 100% |
-| 5 - Navigation & Help | Not Started | INSP-03, INSP-04 | 0% |
+| 5 - Navigation & Help | Planned | INSP-03, INSP-04 | 0% |
 | 6 - Output Modes | Not Started | OUT-01, OUT-02 | 0% |
 
 **Overall:** 4/6 phases complete (67%)
 
 ---
 *Roadmap created: 2026-01-26*
-*Last updated: 2026-01-26*
+*Last updated: 2026-01-27*
 *Phase 2 complete: 2026-01-26*
 *Phase 3 complete: 2026-01-26*
 *Phase 4 complete: 2026-01-26*
+*Phase 5 planned: 2026-01-27*
