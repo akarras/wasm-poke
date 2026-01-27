@@ -125,6 +125,13 @@ Plans:
 4. Cursor sync is immediate and never desyncs (addresses main TUI bug)
 5. Source panel shows "no source info" gracefully when DWARF mapping unavailable
 
+**Plans:** 3 plans
+
+Plans:
+- [ ] 04-01-PLAN.md - Create InspectorPanel with WAT display and keyboard navigation
+- [ ] 04-02-PLAN.md - Add Hex panel and Source panel with highlighting
+- [ ] 04-03-PLAN.md - Implement synchronized scrolling and click navigation
+
 **Notes:**
 - All three panels derive display position from single instruction_cursor in SelectionState
 - This is the critical feature that differentiates wasm-poke and must work flawlessly
@@ -185,7 +192,7 @@ Plans:
 | 1 - Foundation | Complete | FOUND-01, FOUND-02 | 100% |
 | 2 - Function List | Complete | LIST-01, LIST-02, LIST-03, LIST-04 | 100% |
 | 3 - Call Graph | Complete | CALL-01, CALL-02, CALL-03, CALL-04 | 100% |
-| 4 - Inspector | Not Started | INSP-01, INSP-02, INSP-05 | 0% |
+| 4 - Inspector | Planned | INSP-01, INSP-02, INSP-05 | 0% |
 | 5 - Navigation & Help | Not Started | INSP-03, INSP-04 | 0% |
 | 6 - Output Modes | Not Started | OUT-01, OUT-02 | 0% |
 
@@ -196,3 +203,4 @@ Plans:
 *Last updated: 2026-01-26*
 *Phase 2 complete: 2026-01-26*
 *Phase 3 complete: 2026-01-26*
+*Phase 4 planned: 2026-01-26*
