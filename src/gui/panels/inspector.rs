@@ -87,6 +87,8 @@ pub struct InspectorPanel {
     cached_current_source_line: Option<u32>,
     /// Last cursor position that triggered scroll (to avoid redundant scrolls).
     last_scrolled_cursor: Option<usize>,
+    /// Flag indicating we just navigated back (skip cursor reset in update_cache).
+    navigated_back: bool,
 }
 
 impl InspectorPanel {
@@ -102,6 +104,7 @@ impl InspectorPanel {
             cached_source_lines: Vec::new(),
             cached_current_source_line: None,
             last_scrolled_cursor: None,
+            navigated_back: false,
         }
     }
 
@@ -177,8 +180,11 @@ impl InspectorPanel {
             self.cached_source_lines = Vec::new();
         }
 
-        // Reset cursor when function changes
-        selection.instruction_cursor = 0;
+        // Reset cursor when function changes via direct selection (not back navigation)
+        if !self.navigated_back {
+            selection.instruction_cursor = 0;
+        }
+        self.navigated_back = false; // Reset flag for next time
 
         true
     }
@@ -359,6 +365,8 @@ impl InspectorPanel {
             }
             KeyAction::GoBack => {
                 // Backspace pressed - go back
+                // Set flag BEFORE navigate_back() so update_cache() preserves restored cursor
+                self.navigated_back = true;
                 if selection.navigate_back() {
                     // Force cache update on next frame
                     self.cached_func_index = None;
